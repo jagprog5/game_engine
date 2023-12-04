@@ -2,7 +2,7 @@ extern crate game_engine;
 use rand::prelude::*;
 use std::{cell::Cell, path::PathBuf};
 
-use game_engine::{GameState, Persistent, Volatile};
+use game_engine::{Entity, GameState, Persistent, Volatile};
 
 fn central_rand(radius: f32) -> (f32, f32) {
     let mut rng = rand::thread_rng();
@@ -68,7 +68,7 @@ impl Volatile for PrimarySquare {
         self.dy_rate.set(-self.y / r.powi(2));
     }
 
-    fn apply_rate(&mut self) -> (bool, Vec<(String, Vec<Box<dyn Volatile>>)>) {
+    fn apply_rate(&mut self) -> (bool, Vec<(String, Vec<Entity>)>) {
         self.x += self.x_rate.get();
         self.dx += self.dx_rate.get();
         self.y += self.y_rate.get();
@@ -79,10 +79,10 @@ impl Volatile for PrimarySquare {
         self.dx *= 0.9995;
         self.dy *= 0.9995;
 
-        let mut to_spawn: Vec<(String, Vec<Box<dyn Volatile>>)> = Vec::new();
+        let mut to_spawn: Vec<(String, Vec<Entity>)> = Vec::new();
         to_spawn.push((
             "objects".to_owned(),
-            vec![Box::new(PrimarySquareTail::from(&self))],
+            vec![Entity::Volatile(Box::new(PrimarySquareTail::new(&self)))],
         ));
         (true, to_spawn)
     }
@@ -109,7 +109,7 @@ struct PrimarySquareTail {
 }
 
 impl PrimarySquareTail {
-    fn from(from: &PrimarySquare) -> Self {
+    fn new(from: &PrimarySquare) -> Self {
         let (drift_x, drift_y) = central_rand(0.2f32);
         Self {
             x: from.x,
@@ -136,7 +136,7 @@ impl Volatile for PrimarySquareTail {
         self.dy_rate.set(drift_y);
     }
 
-    fn apply_rate(&mut self) -> (bool, Vec<(String, Vec<Box<dyn Volatile>>)>) {
+    fn apply_rate(&mut self) -> (bool, Vec<(String, Vec<Entity>)>) {
         self.x += self.x_rate.get();
         self.dx += self.dx_rate.get();
         self.y += self.y_rate.get();
@@ -164,17 +164,31 @@ impl Volatile for PrimarySquareTail {
     }
 }
 
+fn get_save_path() -> String {
+    let mut save_path: PathBuf = file!().into();
+    save_path.pop();
+    save_path.push("hello_save_file.bin");
+    save_path.to_str().unwrap().to_owned()
+}
+
 fn main() -> Result<(), String> {
     let mut state = GameState::new(
-        "HELLO WORLD: graphics, persistent / volatile, mouse",
+        "HELLO WORLD: graphics, persistent / volatile",
         (800u32, 600u32),
         vec!["objects".to_owned()],
     )?;
-    state
-        .layers
-        .get_mut("objects")
-        .unwrap()
-        .push(Box::new(PrimarySquare::new()));
+    // check if save file already exists
+    if std::fs::metadata(get_save_path()).is_ok() {
+        println!("recovering last save");
+        state.load(get_save_path())?;
+    } else {
+        state
+            .save_state
+            .layers
+            .get_mut("objects")
+            .unwrap()
+            .push(Entity::Persistent(Box::new(PrimarySquare::new())));
+    }
     state.run(|event| {
         match event {
             sdl2::event::Event::Quit { .. }
@@ -186,9 +200,6 @@ fn main() -> Result<(), String> {
         }
         true
     });
-    let mut save_path: PathBuf = file!().into();
-    save_path.pop();
-    save_path.push("hello_save_file.bin");
-    state.save(save_path.to_str().unwrap().to_owned())?;
+    state.save(get_save_path())?;
     Ok(())
 }
