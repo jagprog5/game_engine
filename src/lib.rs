@@ -1,6 +1,5 @@
-use std::cell::Cell;
-
 use serde::ser::SerializeMap;
+use std::cell::Cell;
 
 extern crate sdl2;
 
@@ -71,116 +70,110 @@ impl Volatile for Entity {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-pub struct LayerState {
-    // order in which layers are rendered
-    pub layer_name_order: Vec<String>,
-
+pub struct LayersWrapper {
     // all things which are part of the game loop. associates layer name with
     // entities in that layer
     #[serde(
-        serialize_with = "serialize_layer_state_layers",
-        deserialize_with = "deserialize_layer_state_layers"
+        serialize_with = "LayersWrapper::serialize_layers",
+        deserialize_with = "LayersWrapper::deserialize_layers"
     )]
     pub layers: std::collections::BTreeMap<String, Vec<Cell<Entity>>>,
 }
 
-fn serialize_layer_state_layers<S>(
-    layers: &std::collections::BTreeMap<String, Vec<Cell<Entity>>>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    let mut state = serializer.serialize_map(Some(layers.len()))?;
-    for (key, entities) in layers {
-        // takes all persistent entities from the layer and serializes them,
-        // then return them back into their cells
-        let mut persistent_entities: Vec<Box<dyn Persistent>> = Vec::new();
-        let mut persistent_entities_return: Vec<&Cell<Entity>> = Vec::new();
-
-        for entity_cell in entities.iter() {
-            let entity = entity_cell.take();
-            match entity {
-                Entity::Volatile(_) => {
-                    entity_cell.set(entity); // return immediately
-                }
-                Entity::Persistent(p) => {
-                    persistent_entities.push(p);
-                    persistent_entities_return.push(entity_cell);
-                }
-                Entity::Taken => panic!("serialize on Taken"),
-            }
-        }
-
-        state.serialize_entry(key, &persistent_entities)?;
-
-        for (persistent_entity, cell) in persistent_entities
-            .into_iter()
-            .zip(persistent_entities_return)
-        {
-            let entity = Entity::Persistent(persistent_entity);
-            cell.set(entity);
-        }
-    }
-    state.end()
-}
-
-fn deserialize_layer_state_layers<'de, D>(
-    deserializer: D,
-) -> Result<std::collections::BTreeMap<String, Vec<Cell<Entity>>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    struct LayerStateLayersVisitor;
-    impl<'de> serde::de::Visitor<'de> for LayerStateLayersVisitor {
-        type Value = std::collections::BTreeMap<String, Vec<Cell<Entity>>>;
-
-        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-            formatter.write_str("a map with render layer keys, and values for persistent entities within those layers")
-        }
-
-        fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
-        where
-            M: serde::de::MapAccess<'de>,
-        {
-            let mut layers = std::collections::BTreeMap::new();
-
-            while let Some((key, persistent_entities)) =
-                map.next_entry::<String, Vec<Box<dyn Persistent>>>()?
-            {
-                let entities = persistent_entities
-                    .into_iter()
-                    .map(|p| Cell::new(Entity::Persistent(p)))
-                    .collect();
-                layers.insert(key, entities);
-            }
-            Ok(layers)
-        }
-    }
-
-    deserializer.deserialize_map(LayerStateLayersVisitor)
-}
-
-impl LayerState {
-    pub fn clear(&mut self) {
-        self.layer_name_order.clear();
-        self.layers.clear();
-    }
-
-    pub fn new(layer_name_order: Vec<String>) -> Self {
-        let layers: std::collections::BTreeMap<String, Vec<Cell<Entity>>> = layer_name_order
+impl LayersWrapper {
+    fn new(layer_names: &'static [&'static str]) -> Self {
+        let layers: std::collections::BTreeMap<String, Vec<Cell<Entity>>> = layer_names
             .iter()
-            .map(|key| (key.to_owned(), Vec::new()))
+            .map(|key| ((*key).to_owned(), Vec::new()))
             .collect();
-        Self {
-            layer_name_order,
-            layers,
+        Self { layers }
+    }
+
+    fn serialize_layers<S>(
+        layers: &std::collections::BTreeMap<String, Vec<Cell<Entity>>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_map(Some(layers.len()))?;
+        for (key, entities) in layers {
+            // takes all persistent entities from the layer and serializes them,
+            // then return them back into their cells
+            let mut persistent_entities: Vec<Box<dyn Persistent>> = Vec::new();
+            let mut persistent_entities_return: Vec<&Cell<Entity>> = Vec::new();
+
+            for entity_cell in entities.iter() {
+                let entity = entity_cell.take();
+                match entity {
+                    Entity::Volatile(_) => {
+                        entity_cell.set(entity); // return immediately
+                    }
+                    Entity::Persistent(p) => {
+                        persistent_entities.push(p);
+                        persistent_entities_return.push(entity_cell);
+                    }
+                    Entity::Taken => panic!("serialize on Taken"),
+                }
+            }
+
+            state.serialize_entry(key, &persistent_entities)?;
+
+            for (persistent_entity, cell) in persistent_entities
+                .into_iter()
+                .zip(persistent_entities_return)
+            {
+                let entity = Entity::Persistent(persistent_entity);
+                cell.set(entity);
+            }
         }
+        state.end()
+    }
+
+    fn deserialize_layers<'de, D>(
+        deserializer: D,
+    ) -> Result<std::collections::BTreeMap<String, Vec<Cell<Entity>>>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct LayerStateLayersVisitor;
+        impl<'de> serde::de::Visitor<'de> for LayerStateLayersVisitor {
+            type Value = std::collections::BTreeMap<String, Vec<Cell<Entity>>>;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a map with render layer keys, and values for persistent entities within those layers")
+            }
+
+            fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+            where
+                M: serde::de::MapAccess<'de>,
+            {
+                let mut layers = std::collections::BTreeMap::new();
+
+                while let Some((key, persistent_entities)) =
+                    map.next_entry::<String, Vec<Box<dyn Persistent>>>()?
+                {
+                    let entities = persistent_entities
+                        .into_iter()
+                        .map(|p| Cell::new(Entity::Persistent(p)))
+                        .collect();
+                    layers.insert(key, entities);
+                }
+                Ok(layers)
+            }
+        }
+
+        deserializer.deserialize_map(LayerStateLayersVisitor)
     }
 }
 
 pub struct GameState {
-    pub layer_state: LayerState,
+    // render order of layers
+    layer_names: &'static [&'static str],
+
+    // all things which are part of the game loop. associates layer name with
+    // entities in that layer
+    layer_wrapper: LayersWrapper,
 
     // this is kept track of and always matches the size of canvas. not sure
     // what sort of sys calls happen under the hood for SDL_GetWindowSize. this
@@ -218,13 +211,13 @@ impl GameState {
     }
 
     /// create a game state, with associated window and sdl context. \
-    /// `win_title` and `win_size` are used to set the properties of the window \
-    /// `layer_name_order` is the set of layer names to register; used internally to \
-    /// determine rendering order of sprites
+    /// `win_title` and `win_size` are used to set the properties of the window\
+    /// `layer_names` is the set of layer names to register; used to indicate
+    /// RENDERING ORDER of sprites
     pub fn new(
         win_title: &'static str,
         win_size: (u32, u32),
-        layer_name_order: Vec<String>,
+        layer_names: &'static [&'static str],
     ) -> Result<Self, String> {
         let sdl_context = sdl2::init()?;
         let sdl_video_subsystem = sdl_context.video()?;
@@ -241,8 +234,12 @@ impl GameState {
             .map_err(|e| e.to_string())?;
         canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
         let event_pump = sdl_context.event_pump()?;
+
+        let layers = LayersWrapper::new(layer_names);
+
         Ok(Self {
-            layer_state: LayerState::new(layer_name_order),
+            layer_names,
+            layer_wrapper: layers,
             window_width: win_size.0,
             window_height: win_size.1,
             event_pump,
@@ -253,10 +250,10 @@ impl GameState {
     }
 
     /// overrides or creates new save file
-    pub fn save(&mut self, save_file_path: String) -> Result<(), String> {
+    pub fn save(&self, save_file_path: String) -> Result<(), String> {
         let file = std::fs::File::create(save_file_path).map_err(|e| e.to_string())?;
         let mut writer = std::io::BufWriter::new(file);
-        serde_json::to_writer(&mut writer, &self.layer_state).map_err(|e| e.to_string())?;
+        serde_json::to_writer(&mut writer, &self.layer_wrapper).map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -264,14 +261,31 @@ impl GameState {
     pub fn load(&mut self, path: String) -> Result<(), String> {
         let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
         let reader = std::io::BufReader::new(file);
-        self.layer_state = serde_json::from_reader(reader).map_err(|e| e.to_string())?;
+        let incoming_layer_wrapper: LayersWrapper = serde_json::from_reader(reader).map_err(|e| e.to_string())?;
+        if ! incoming_layer_wrapper.layers.keys().eq(self.layer_wrapper.layers.keys()) {
+            return Err("loaded save file doesn't contain correct render layers".to_owned());
+        }
+        self.layer_wrapper = incoming_layer_wrapper;
         Ok(())
     }
 
-    /// f is a closure that handles sdl2 events. returns false iff run should return
-    pub fn run<F>(&mut self, f: F)
+    pub fn clear_entities(&mut self) {
+        self.layer_wrapper.layers.values_mut().for_each(|v| v.clear());
+    }
+
+    pub fn spawn(&mut self, e: Entity, layer: String) {
+        self.layer_wrapper
+            .layers
+            .get_mut(&layer)
+            .expect(&format!("Manual spawn to unregistered layer: {}", layer))
+            .push(Cell::new(e));
+    }
+
+    /// f is a closure that handles sdl2 events. returns false of err iff run
+    /// should return
+    pub fn run<F>(&mut self, f: F) -> Result<(), String>
     where
-        F: Fn(sdl2::event::Event) -> bool,
+        F: Fn(&mut Self, sdl2::event::Event) -> Result<bool, String>,
     {
         let seconds_per_frame = std::time::Duration::from_secs_f32(1f32 / 120f32);
         'outer: loop {
@@ -289,14 +303,20 @@ impl GameState {
                         self.window_height = y_size as u32;
                     }
                 }
+
                 // forward all event to the closure
-                if !f(event) {
-                    break 'outer;
-                }
+                match f(self, event) {
+                    Ok(alive) => {
+                        if !alive {
+                            break 'outer; // closure requested finish
+                        }
+                    }
+                    Err(e) => return Err(e), // propagate error
+                };
             }
 
             // generate rates
-            self.layer_state.layers.values().for_each(|layer| {
+            self.layer_wrapper.layers.values().for_each(|layer| {
                 layer.iter().for_each(|entity_cell| {
                     let mut entity = entity_cell.take();
                     entity.generate_rate(&self);
@@ -307,7 +327,7 @@ impl GameState {
             let mut spawned: Vec<(String, Vec<Entity>)> = Vec::new();
 
             // apply rate - handle despawn
-            self.layer_state.layers.values_mut().for_each(|layer| {
+            self.layer_wrapper.layers.values_mut().for_each(|layer| {
                 let len = layer.len();
                 for i in (0..len).rev() {
                     let entity_cell = &layer[i];
@@ -326,19 +346,18 @@ impl GameState {
 
             // insert spawned elements after the new states are available
             for s in spawned {
-                let layer = self
-                    .layer_state
-                    .layers
-                    .get_mut(&s.0)
-                    .expect(&format!("Tried spawning to unregisted layer: {}", &s.0));
+                let layer = self.layer_wrapper.layers.get_mut(&s.0).expect(&format!(
+                    "Entity created spawn for unregistered layer: {}",
+                    &s.0
+                ));
 
                 let mut spawned_as_cells = s.1.into_iter().map(Cell::new).collect();
                 layer.append(&mut spawned_as_cells);
             }
 
             // render all
-            self.layer_state.layers.values().for_each(|layer| {
-                layer.iter().for_each(|entity_cell| {
+            self.layer_names.iter().for_each(|layer_name| {
+                self.layer_wrapper.layers.get(*layer_name).unwrap().iter().for_each(|entity_cell| {
                     let entity = entity_cell.take();
                     entity.render(&mut self.canvas, (self.window_width, self.window_height));
                     entity_cell.set(entity);
@@ -353,5 +372,6 @@ impl GameState {
                 std::thread::sleep(seconds_per_frame - duration);
             }
         }
+        Ok(())
     }
 }

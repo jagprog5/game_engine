@@ -113,6 +113,8 @@ impl Volatile for PrimarySquare {
 #[typetag::serde]
 impl Persistent for PrimarySquare {}
 
+// =================================================================================================
+
 struct PrimarySquareTail {
     x: f32,
     y: f32,
@@ -176,7 +178,7 @@ impl Volatile for PrimarySquareTail {
         let red = (255f32 * if self.r {progress_on} else {progress_off}) as u8;
         let green = (255f32 * if self.g {progress_on} else {progress_off}) as u8;
         let blue = (255f32 * if self.b {progress_on} else {progress_off}) as u8;
-        let alpha = (50f32 * progress_on) as u8;
+        let alpha = (100f32 * progress_on) as u8;
         canvas.set_draw_color(sdl2::pixels::Color::RGBA(red, green, blue, alpha));
         canvas
             .fill_rect(sdl2::rect::Rect::new(
@@ -189,6 +191,7 @@ impl Volatile for PrimarySquareTail {
     }
 }
 
+
 fn get_save_path() -> String {
     let mut save_path: PathBuf = file!().into();
     save_path.pop();
@@ -196,45 +199,57 @@ fn get_save_path() -> String {
     save_path.to_str().unwrap().to_owned()
 }
 
+const OBJECTS: &'static str = "objects";
+const LAYER_NAMES: &'static [&'static str] = &[OBJECTS];
 
 fn main() -> Result<(), String> {
     let save_file_path: String  = get_save_path();
 
+    fn populate_initial_entities(state: &mut GameState) {
+        for _ in 0..5 {
+            state.spawn(Entity::Persistent(Box::new(
+                PrimarySquare::new(),
+            )), OBJECTS.to_owned());
+        }
+    }
+
     let mut state = GameState::new(
-        "HELLO",
+        "controls: s, l, r, esc",
         (800u32, 600u32),
-        vec!["objects".to_owned()],
+        LAYER_NAMES,
     )?;
     // check if save file already exists
     if std::fs::metadata(save_file_path.clone()).is_ok() {
-        println!("recovering last save");
+        println!("loading save");
         state.load(save_file_path.clone())?;
     } else {
-        for _ in 0..5 {
-            state
-                .layer_state
-                .layers
-                .get_mut("objects")
-                .unwrap()
-                .push(std::cell::Cell::new(Entity::Persistent(Box::new(
-                    PrimarySquare::new(),
-                ))));
-        }
+        populate_initial_entities(&mut state);
     }
-    state.run(|event| {
+    state.run(|state, event| {
         match event {
             sdl2::event::Event::Quit { .. }
             | sdl2::event::Event::KeyDown {
                 keycode: Some(sdl2::keyboard::Keycode::Escape),
                 ..
-            } => return false,
-            sdl2::event::Event::KeyUp { keycode: Some(sdl2::keyboard::Keycode::Escape), .. } => {
-                // state.save()
+            } => return Ok(false),
+            sdl2::event::Event::KeyUp { keycode: Some(sdl2::keyboard::Keycode::S), .. } => {
+                state.save(save_file_path.clone())?;
+                println!("manual save");
+            },
+            sdl2::event::Event::KeyUp { keycode: Some(sdl2::keyboard::Keycode::L), .. } => {
+                state.load(save_file_path.clone())?;
+                println!("manual load");
+            },
+            sdl2::event::Event::KeyUp { keycode: Some(sdl2::keyboard::Keycode::R), .. } => {
+                state.clear_entities();
+                populate_initial_entities(state);
+                println!("reset");
             },
             _ => {}
         }
-        true
-    });
+        Ok(true)
+    })?;
+    println!("save on exit");
     state.save(save_file_path)?;
     Ok(())
 }
