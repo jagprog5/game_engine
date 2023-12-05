@@ -1,5 +1,5 @@
 use serde::ser::SerializeMap;
-use std::cell::Cell;
+use std::{cell::Cell, rc::Rc};
 
 extern crate sdl2;
 
@@ -25,13 +25,12 @@ pub trait Volatile {
 pub trait Persistent: Volatile {}
 
 pub enum Entity {
-    // note that generate_rate takes a mutable ref to self and a immutable ref
-    // to state. state includes all entities, including this one which is having
-    // generate_rate called on it. so we have a mutable reference to self and a
-    // immutable reference to self via state.layer_state.layers[i]. to satisfy
-    // borrow checking rules, the entity which is generating its rate is taken,
-    // leaving Taken as a placeholder value. self if now the only reference,
-    // satsifying the borrow checker.
+    /// `Taken` is used internally to satisfy the borrow checker. Typically never
+    /// use.
+    // For example, from the perspective of an Entity with generate_rate being
+    // called upon it, if it looks at the state arg, it will find that in place
+    // of itself is a Taken. That way there isn't a mutable ref to self (first) arg,
+    // and a immutable ref to self (second, state arg) at the same time.
     Taken,
     Volatile(Box<dyn Volatile>),
     Persistent(Box<dyn Persistent>),
@@ -77,12 +76,12 @@ pub struct LayersWrapper {
         serialize_with = "LayersWrapper::serialize_layers",
         deserialize_with = "LayersWrapper::deserialize_layers"
     )]
-    pub layers: std::collections::BTreeMap<String, Vec<Cell<Entity>>>,
+    pub layers: std::collections::BTreeMap<String, Vec<Rc<Cell<Entity>>>>,
 }
 
 impl LayersWrapper {
     fn new(layer_names: &'static [&'static str]) -> Self {
-        let layers: std::collections::BTreeMap<String, Vec<Cell<Entity>>> = layer_names
+        let layers: std::collections::BTreeMap<String, Vec<Rc<Cell<Entity>>>> = layer_names
             .iter()
             .map(|key| ((*key).to_owned(), Vec::new()))
             .collect();
@@ -90,7 +89,7 @@ impl LayersWrapper {
     }
 
     fn serialize_layers<S>(
-        layers: &std::collections::BTreeMap<String, Vec<Cell<Entity>>>,
+        layers: &std::collections::BTreeMap<String, Vec<Rc<Cell<Entity>>>>,
         serializer: S,
     ) -> Result<S::Ok, S::Error>
     where
@@ -132,13 +131,13 @@ impl LayersWrapper {
 
     fn deserialize_layers<'de, D>(
         deserializer: D,
-    ) -> Result<std::collections::BTreeMap<String, Vec<Cell<Entity>>>, D::Error>
+    ) -> Result<std::collections::BTreeMap<String, Vec<Rc<Cell<Entity>>>>, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         struct LayerStateLayersVisitor;
         impl<'de> serde::de::Visitor<'de> for LayerStateLayersVisitor {
-            type Value = std::collections::BTreeMap<String, Vec<Cell<Entity>>>;
+            type Value = std::collections::BTreeMap<String, Vec<Rc<Cell<Entity>>>>;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
                 formatter.write_str("a map with render layer keys, and values for persistent entities within those layers")
@@ -155,7 +154,7 @@ impl LayersWrapper {
                 {
                     let entities = persistent_entities
                         .into_iter()
-                        .map(|p| Cell::new(Entity::Persistent(p)))
+                        .map(|p| Rc::new(Cell::new(Entity::Persistent(p))))
                         .collect();
                     layers.insert(key, entities);
                 }
@@ -261,8 +260,13 @@ impl GameState {
     pub fn load(&mut self, path: String) -> Result<(), String> {
         let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
         let reader = std::io::BufReader::new(file);
-        let incoming_layer_wrapper: LayersWrapper = serde_json::from_reader(reader).map_err(|e| e.to_string())?;
-        if ! incoming_layer_wrapper.layers.keys().eq(self.layer_wrapper.layers.keys()) {
+        let incoming_layer_wrapper: LayersWrapper =
+            serde_json::from_reader(reader).map_err(|e| e.to_string())?;
+        if !incoming_layer_wrapper
+            .layers
+            .keys()
+            .eq(self.layer_wrapper.layers.keys())
+        {
             return Err("loaded save file doesn't contain correct render layers".to_owned());
         }
         self.layer_wrapper = incoming_layer_wrapper;
@@ -270,15 +274,21 @@ impl GameState {
     }
 
     pub fn clear_entities(&mut self) {
-        self.layer_wrapper.layers.values_mut().for_each(|v| v.clear());
+        self.layer_wrapper
+            .layers
+            .values_mut()
+            .for_each(|v| v.clear());
     }
 
     pub fn spawn(&mut self, e: Entity, layer: String) {
+        if let Entity::Taken = e {
+            panic!("Can't spawn a Taken");
+        }
         self.layer_wrapper
             .layers
             .get_mut(&layer)
             .expect(&format!("Manual spawn to unregistered layer: {}", layer))
-            .push(Cell::new(e));
+            .push(Rc::new(Cell::new(e)));
     }
 
     /// f is a closure that handles sdl2 events. returns false of err iff run
@@ -351,17 +361,22 @@ impl GameState {
                     &s.0
                 ));
 
-                let mut spawned_as_cells = s.1.into_iter().map(Cell::new).collect();
+                let mut spawned_as_cells = s.1.into_iter().map(Cell::new).map(Rc::new).collect();
                 layer.append(&mut spawned_as_cells);
             }
 
             // render all
             self.layer_names.iter().for_each(|layer_name| {
-                self.layer_wrapper.layers.get(*layer_name).unwrap().iter().for_each(|entity_cell| {
-                    let entity = entity_cell.take();
-                    entity.render(&mut self.canvas, (self.window_width, self.window_height));
-                    entity_cell.set(entity);
-                })
+                self.layer_wrapper
+                    .layers
+                    .get(*layer_name)
+                    .unwrap()
+                    .iter()
+                    .for_each(|entity_cell| {
+                        let entity = entity_cell.take();
+                        entity.render(&mut self.canvas, (self.window_width, self.window_height));
+                        entity_cell.set(entity);
+                    })
             });
 
             self.canvas.present();
