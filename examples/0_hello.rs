@@ -1,11 +1,11 @@
 extern crate game_engine;
 use core::panic;
-use std::path::PathBuf;
 use rand::prelude::*;
-
+use std::path::PathBuf;
 
 use game_engine::{
-    GameState, Persistent, PersistentSpawnChanges, Volatile, VolatileSpawn, VolatileSpawnChanges, PersistentRef,
+    GameState, MaybePersistentRef, Persistent, PersistentRef, PersistentRefPromotionResult,
+    PersistentSpawn, PersistentSpawnChanges, Volatile, VolatileSpawn, VolatileSpawnChanges,
 };
 
 fn central_rand(radius: f32) -> (f32, f32) {
@@ -41,6 +41,7 @@ struct PrimarySquare {
 
 impl PrimarySquare {
     const SIZE: f32 = 20.;
+    const REPLACE_CHANCE: f64 = 0.0005;
     fn new() -> Self {
         let (x, y) = central_rand(200f32);
         let dist = (x.powi(2) + y.powi(2)).sqrt();
@@ -100,12 +101,19 @@ impl Persistent for PrimarySquare {
     }
 
     fn apply_spawns(&self) -> PersistentSpawnChanges {
+        let replace_self: bool = rand::thread_rng().gen_bool(Self::REPLACE_CHANCE);
+
+        let mut persistent_spawns: Vec<(&'static str, Vec<PersistentSpawn>)> = Vec::new();
+        if replace_self {
+            persistent_spawns.push((OBJECTS, vec![Box::new(PrimarySquare::new())]))
+        }
+
         let mut volatile_spawns: Vec<(&'static str, Vec<VolatileSpawn>)> = Vec::new();
         volatile_spawns.push((OBJECTS, vec![Box::new(PrimarySquareTail::new(&self))]));
         PersistentSpawnChanges {
-            alive: true,
+            alive: !replace_self,
             volatile_spawns,
-            persistent_spawns: Vec::new(),
+            persistent_spawns,
         }
     }
 
@@ -205,65 +213,66 @@ impl Volatile for PrimarySquareTail {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Follower {
     #[serde(skip)]
-    followee: Option<PersistentRef>,
+    followee: MaybePersistentRef,
     x: f32,
     y: f32,
+    speed: f32,
     countdown: usize,
 }
 
 impl Follower {
-    const SIZE: f32 = 10.;
-    const MOVE_SPEED: f32 = 2.;
+    const SIZE: f32 = 2.;
+    const MIN_SPEED: f32 = 2.;
+    const MAX_SPEED_EXCLUSIVE: f32 = 10.;
+    const COUNTDOWN_RESET: usize = 2 * GameState::GOAL_FPS as usize;
+
     fn new() -> Self {
         Self {
-            followee: None,
+            followee: MaybePersistentRef::None,
             x: 0f32,
             y: 0f32,
-            countdown: 0
+            speed: rand::thread_rng().gen_range(Self::MIN_SPEED..Self::MAX_SPEED_EXCLUSIVE),
+            countdown: rand::thread_rng().gen_range(0..Self::COUNTDOWN_RESET),
         }
     }
 
-    fn get_follow_pos(f: &Option<PersistentRef>) -> (f32, f32) {
-        if let None = f {
+    /// holds in place with self reference or if followee has despawned or not been set.
+    /// otherwise yields the entities position
+    fn get_follow_pos(&self) -> (f32, f32) {
+        let f = &self.followee;
+        let weak_ref = match f {
             // could be that OBJECTS layer is empty. can't obtain a new
             // followee. this won't happen since in this case self is always in
             // that layer, making it never empty.
-            return (0f32, 0f32);
-        }
-
-        let rc = match f.clone().unwrap().upgrade() {
-            Some(rc) => rc, // PersistentEntity successfully gained
-            None => {
-                // followee has despawned. should never happen. the ref was set
-                // at generate_rate, and this function is called in apply_rate.
-                // despawn doesn't happen between those two phases. it happens
-                // after apply_rate, in apply_spawns
-                return (0f32, 0f32)
-            },
+            MaybePersistentRef::None => return (self.x, self.y),
+            // followee despawned. hold in place until countdown runs out
+            MaybePersistentRef::Despawned => return (self.x, self.y),
+            MaybePersistentRef::Some(e) => e,
         };
 
-        let e = rc.take();
-        
-        if let None = e {
-            // this happens if e is self! already taken by game state before
-            // calling update functions
-            return (0f32, 0f32)
-        }
-        let e = e.unwrap();
+        let (e_position, e) = match weak_ref.get() {
+            PersistentRefPromotionResult::Despawned => return (self.x, self.y),
+            // self reference. go to origin
+            PersistentRefPromotionResult::Taken => return (self.x, self.y),
+            PersistentRefPromotionResult::Some(e_position, e) => (e_position, e),
+        };
+
+        // downcast to concrete type and get position
         let e = match e.downcast::<Follower>() {
             Ok(e) => {
-                let r = (e.x, e.y);
-                rc.set(Some(e));
-                return r;
-            },
+                let ret = (e.x, e.y);
+                // return the entitiy back into its position
+                PersistentRef::set((e_position, e));
+                return ret;
+            }
             Err(e) => e,
         };
         let _e = match e.downcast::<PrimarySquare>() {
             Ok(e) => {
-                let r = (e.x, e.y);
-                rc.set(Some(e));
-                return r;
-            },
+                let ret = (e.x, e.y);
+                PersistentRef::set((e_position, e));
+                return ret;
+            }
             Err(e) => e,
         };
         panic!("get_follow_pos not implemented for followee type");
@@ -272,11 +281,11 @@ impl Follower {
 
 #[typetag::serde]
 impl Persistent for Follower {
-    fn save_entity_references(&self) -> Vec<Option<PersistentRef>> {
+    fn save_entity_references(&self) -> Vec<MaybePersistentRef> {
         vec![self.followee.clone()]
     }
 
-    fn load_entity_references(&mut self, v: Vec<Option<PersistentRef>>) {
+    fn load_entity_references(&mut self, v: Vec<MaybePersistentRef>) {
         if v.len() != 1 {
             panic!("follower requires one persistent ref to be loaded from the save file")
         }
@@ -286,52 +295,91 @@ impl Persistent for Follower {
 
     fn generate_rate(&mut self, state: &GameState) {
         let mut needs_new_followee = false;
+
         if self.countdown == 0 {
             // periodically get new follower
             needs_new_followee = true;
-        } else if self.followee.is_none() {
-            // this will be none on one of two conditions.
-            // 1. this is the first time generate_rate is called
-            // 2. the save file was tampered with
+        } else if let MaybePersistentRef::None = self.followee {
             needs_new_followee = true;
-        } else if let None = self.followee.clone().unwrap().upgrade() {
-            // followee has been freed (it is no longer alive)
+        } else if let MaybePersistentRef::Despawned = self.followee {
             needs_new_followee = true;
-        }        
+        }
 
-        if needs_new_followee {
-            let entities = state.get_persistents(OBJECTS);
-            if !entities.is_empty() {
-                let random_index = rand::thread_rng().gen_range(0..entities.len());
-                let random_element = &entities[random_index];
-                self.followee = Some(std::rc::Rc::downgrade(&random_element.rc));
+        if !needs_new_followee {
+            // nothing else is done in generate rate except setting the followee if needed
+            return;
+        }
+
+        let entities = state.get_persistents(OBJECTS);
+
+        // do not get a new followee if it's impossible to do so
+        if entities.is_empty() {
+            return;
+        }
+
+        // don't stay on the same entity more than once. loop until new one found
+        loop {
+            let random_index = rand::thread_rng().gen_range(0..entities.len());
+            let random_entity = &entities[random_index];
+
+            // should the new one be used? or should it do another
+            // iteration and find another random one
+            let use_random_entity: bool = match &self.followee {
+                // if the current one is
+                MaybePersistentRef::None => true,
+                MaybePersistentRef::Despawned => true,
+                MaybePersistentRef::Some(persistent_ref) => {
+                    if entities.len() <= 1 {
+                        // impossible to find different followee
+                        true
+                    } else {
+                        // check if this followee is different that the current one
+                        match persistent_ref.0.upgrade() {
+                            Some(e) => {
+                                // only condition in which another iteration
+                                // happens is when entities.len() > 1 and the
+                                // randomly selected entitiy is the same as the
+                                // followee
+                                !std::rc::Rc::ptr_eq(&e, &random_entity.0)
+                            }
+                            None => true,
+                        }
+                    }
+                }
+            };
+
+            if use_random_entity {
+                let weak = std::rc::Rc::downgrade(&random_entity.0);
+                self.followee = MaybePersistentRef::Some(PersistentRef(weak));
+                break;
             }
         }
     }
 
     fn apply_rate(&mut self) {
         if self.countdown == 0 {
-            self.countdown = 5 * 60; // 60 downto 1
+            self.countdown = Self::COUNTDOWN_RESET;
         } else {
+            // each follow occurs for Self::COUNTDOWN_RESET downto 1 frames (inclusive)
             self.countdown -= 1;
         }
 
-        let (goal_x, goal_y) = Follower::get_follow_pos(&self.followee);
+        let (goal_x, goal_y) = Follower::get_follow_pos(&self);
         let mag = ((goal_x - self.x).powi(2) + (goal_y - self.y).powi(2)).sqrt();
-        if mag < Follower::MOVE_SPEED {
+        if mag < self.speed {
             // prevent jitter
             self.x = goal_x;
             self.y = goal_y;
         } else {
-            let dx = (goal_x - self.x) / mag * Follower::MOVE_SPEED;
-            let dy = (goal_y - self.y) / mag * Follower::MOVE_SPEED;
+            let dx = (goal_x - self.x) / mag * self.speed;
+            let dy = (goal_y - self.y) / mag * self.speed;
             self.x += dx;
             self.y += dy;
         }
     }
 
     fn render(&self, canvas: &mut sdl2::render::WindowCanvas, window_size: (u32, u32)) {
-        canvas.set_draw_color(sdl2::pixels::Color::RGBA(255, 255, 255, 100));
+        canvas.set_draw_color(sdl2::pixels::Color::RGBA(255, 255, 255, 50));
         canvas
             .fill_rect(sdl2::rect::Rect::new(
                 (self.x - Follower::SIZE / 2.) as i32 + window_size.0 as i32 / 2,
@@ -359,10 +407,12 @@ fn main() -> Result<(), String> {
     let save_file_path: String = get_save_path();
 
     fn populate_initial_entities(state: &mut GameState) {
+        for _ in 0..700 {
+            state.spawn_persistent(Box::new(Follower::new()), OBJECTS);
+        }
         for _ in 0..5 {
             state.spawn_persistent(Box::new(PrimarySquare::new()), OBJECTS);
         }
-        state.spawn_persistent(Box::new(Follower::new()), OBJECTS);
     }
 
     let mut state = GameState::new("controls: s, l, r, esc", (800u32, 600u32), RENDER_ORDER)?;

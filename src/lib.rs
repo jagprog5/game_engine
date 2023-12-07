@@ -78,21 +78,18 @@ pub trait Persistent: Downcast {
     /// `window_size` is the size of the `canvas`
     fn render(&self, canvas: &mut sdl2::render::WindowCanvas, window_size: (u32, u32));
 
-    /// references to Persistent objects which need to be saved and loaded.\
-    /// if the weak reference element has "died" and is cleanup up, then this\
-    /// is seen as a None element on load_entity_references
-    fn save_entity_references(&self) -> Vec<Option<PersistentRef>> {
+    /// references to Persistent objects which need to be saved
+    fn save_entity_references(&self) -> Vec<MaybePersistentRef> {
         Vec::new()
     }
 
     /// same number of elements is given here as was returned by save_entity_references
-    fn load_entity_references(&mut self, v: Vec<Option<PersistentRef>>) {
+    fn load_entity_references(&mut self, v: Vec<MaybePersistentRef>) {
         if !v.is_empty() {
             panic!("persistent entity references provided to instance that doesn't take any");
         }
     }
 }
-
 impl_downcast!(Persistent);
 
 // helper type used internally. shared pointer to Volatile
@@ -100,95 +97,89 @@ impl_downcast!(Persistent);
 // and weak reference between entities
 // Cell, Option: provides interior mutability for each instance.
 // Box: since the size is not known at compile time.
-pub struct VolatileEntity {
-    pub rc: Rc<Cell<Option<Box<dyn Volatile>>>>,
-}
+pub struct VolatileEntity(pub Rc<Cell<Option<Box<dyn Volatile>>>>);
 
 // functions forward to Volatile
 impl VolatileEntity {
     fn generate_rate(&self, state: &GameState) {
-        let mut e = self.rc.take().unwrap();
+        let mut e = self.0.take().unwrap();
         e.generate_rate(state);
-        self.rc.set(Some(e));
+        self.0.set(Some(e));
     }
 
     fn apply_rate(&self) {
-        let mut e = self.rc.take().unwrap();
+        let mut e = self.0.take().unwrap();
         e.apply_rate();
-        self.rc.set(Some(e));
+        self.0.set(Some(e));
     }
 
     fn apply_spawns(&self) -> VolatileSpawnChanges {
-        let e = self.rc.take().unwrap();
+        let e = self.0.take().unwrap();
         let r = e.apply_spawns();
-        self.rc.set(Some(e));
+        self.0.set(Some(e));
         r
     }
 
     fn render(&self, canvas: &mut sdl2::render::WindowCanvas, window_size: (u32, u32)) {
-        let e = self.rc.take().unwrap();
+        let e = self.0.take().unwrap();
         e.render(canvas, window_size);
-        self.rc.set(Some(e));
+        self.0.set(Some(e));
     }
 }
 
 // helper type used internally. shared pointer to persistent
-pub struct PersistentEntity {
-    pub rc: Rc<Cell<Option<Box<dyn Persistent>>>>,
-}
+pub struct PersistentEntity(pub Rc<Cell<Option<Box<dyn Persistent>>>>);
 
 // functions forward to Persistent
 impl PersistentEntity {
     fn clone(&self) -> Self {
-        PersistentEntity {
-            rc: self.rc.clone(),
-        }
+        PersistentEntity(self.0.clone())
     }
 
     fn generate_rate(&self, state: &GameState) {
-        let mut e = self.rc.take().unwrap();
+        let mut e = self.0.take().unwrap();
         e.generate_rate(state);
-        self.rc.set(Some(e));
+        self.0.set(Some(e));
     }
 
     fn apply_rate(&self) {
-        let mut e = self.rc.take().unwrap();
+        let mut e = self.0.take().unwrap();
         e.apply_rate();
-        self.rc.set(Some(e));
+        self.0.set(Some(e));
     }
 
     fn apply_spawns(&self) -> PersistentSpawnChanges {
-        let e = self.rc.take().unwrap();
+        let e = self.0.take().unwrap();
         let r = e.apply_spawns();
-        self.rc.set(Some(e));
+        self.0.set(Some(e));
         r
     }
 
     fn render(&self, canvas: &mut sdl2::render::WindowCanvas, window_size: (u32, u32)) {
-        let e = self.rc.take().unwrap();
+        let e = self.0.take().unwrap();
         e.render(canvas, window_size);
-        self.rc.set(Some(e));
+        self.0.set(Some(e));
     }
 
-    fn save_entity_references(&self) -> Vec<Option<PersistentRef>> {
-        let e = self.rc.take().unwrap();
+    fn save_entity_references(&self) -> Vec<MaybePersistentRef> {
+        let e = self.0.take().unwrap();
         let r = e.save_entity_references();
-        self.rc.set(Some(e));
+        self.0.set(Some(e));
         r
     }
 
-    fn load_entity_references(&self, v: Vec<Option<PersistentRef>>) {
-        let mut e = self.rc.take().unwrap();
+    fn load_entity_references(&self, v: Vec<MaybePersistentRef>) {
+        let mut e = self.0.take().unwrap();
         e.load_entity_references(v);
-        self.rc.set(Some(e));
+        self.0.set(Some(e));
     }
 }
 
 // hash and equality operators based on pointer address for use in unordered set
-// map when loading and saving
+// and unordered map when loading and saving
 impl PartialEq for PersistentEntity {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.rc, &other.rc)
+        Rc::ptr_eq(&self.0, &other.0)
     }
 }
 
@@ -196,16 +187,90 @@ impl Eq for PersistentEntity {}
 
 impl std::hash::Hash for PersistentEntity {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        let ptr = &*self.rc as *const _ as usize;
+        let ptr = &*self.0 as *const _ as usize;
         ptr.hash(state);
     }
 }
 
-/// inter-persistent entity reference
-pub type PersistentRef = Weak<Cell<Option<Box<dyn Persistent>>>>;
+pub struct PersistentRef(pub Weak<Cell<Option<Box<dyn Persistent>>>>);
+
+impl Clone for PersistentRef {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+/// a weak reference between two persistent entities, which will be saved in the
+/// save file and restored on load
+pub enum MaybePersistentRef {
+    /// None is the default state for a MaybePersistentRef, indicating it hasn't been set yet
+    None,
+    /// indicates that on save this ref pointed to something which is no longer
+    /// part of the game.
+    Despawned,
+    Some(PersistentRef),
+}
+
+impl Default for MaybePersistentRef {
+    fn default() -> Self {
+        MaybePersistentRef::None
+    }
+}
+
+impl Clone for MaybePersistentRef {
+    fn clone(&self) -> Self {
+        match self {
+            Self::None => Self::None,
+            Self::Despawned => Self::Despawned,
+            Self::Some(arg0) => Self::Some(arg0.clone()),
+        }
+    }
+}
+
+/// result of promoting a PersistentRef to a PersistentEntity
+pub enum PersistentRefPromotionResult {
+    /// promoting the weak reference failed because it despawned.\
+    /// typically this should be handled the same as for `MaybePersistentRef::Despawned`
+    Despawned,
+    // someone else is looking at this reference, most likely because of a self
+    // reference. or from improper api use when a PersistentRef wasn't returned
+    Taken,
+    // 1 is an exclusive reference to the entity.
+    // 0 is the place that it came from. it gets push back by `PersistentRef::set`
+    Some(PersistentEntity, Box<dyn Persistent>),
+}
+
+impl PersistentRef {
+    // if Some is returned, it must be followed by a corresponding call to set
+    pub fn get(&self) -> PersistentRefPromotionResult {
+        let rc = match self.0.upgrade() {
+            Some(rc) => rc,
+            None => return PersistentRefPromotionResult::Despawned,
+        };
+
+        match rc.take() {
+            Some(e) => PersistentRefPromotionResult::Some(PersistentEntity(rc), e),
+            None => PersistentRefPromotionResult::Taken,
+        }
+    }
+
+    // return the PersistentEntity back to its position
+    pub fn set(s: (PersistentEntity, Box<dyn Persistent>)) {
+        s.0 .0.set(Some(s.1));
+    }
+}
+
 pub type PersistentSpawn = Box<dyn Persistent>;
 pub type VolatileRef = Weak<Cell<Option<Box<dyn Volatile>>>>;
 pub type VolatileSpawn = Box<dyn Volatile>;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+/// corresponds to variants of `MaybePersistentRef`
+enum Tag {
+    None,
+    Despawned,
+    Some(u64),
+}
 
 // used internally for PersistentState serialize and deserialize
 struct TaggedPersistent {
@@ -213,9 +278,8 @@ struct TaggedPersistent {
     e: PersistentEntity,
     // the id for this entity
     tag: u64,
-    // the tags that this entity points to.
-    // none indicates that the PersistentRef was no longer valid
-    refs: Vec<Option<u64>>,
+    // the tags that this entity points to
+    refs: Vec<Tag>,
 }
 
 impl serde::Serialize for TaggedPersistent {
@@ -224,9 +288,9 @@ impl serde::Serialize for TaggedPersistent {
         S: serde::Serializer,
     {
         let mut state = serializer.serialize_struct("TaggedPersistent", 3)?;
-        let e = self.e.rc.take().unwrap();
+        let e = self.e.0.take().unwrap();
         state.serialize_field("e", &e)?;
-        self.e.rc.set(Some(e));
+        self.e.0.set(Some(e));
         state.serialize_field("tag", &self.tag)?;
         state.serialize_field("refs", &self.refs)?;
         state.end()
@@ -242,14 +306,12 @@ impl<'de> serde::Deserialize<'de> for TaggedPersistent {
         struct TaggedPersistentHelper {
             e: Box<dyn Persistent>,
             tag: u64,
-            refs: Vec<Option<u64>>,
+            refs: Vec<Tag>,
         }
 
         let helper: TaggedPersistentHelper = serde::de::Deserialize::deserialize(deserializer)?;
         Ok(TaggedPersistent {
-            e: PersistentEntity {
-                rc: Rc::new(Cell::new(Some(helper.e))),
-            },
+            e: PersistentEntity(Rc::new(Cell::new(Some(helper.e)))),
             tag: helper.tag,
             refs: helper.refs,
         })
@@ -297,7 +359,7 @@ impl PersistentState {
             for entity in entities.iter() {
                 // create the lookup association, but don't bother if it's
                 // guarenteed that this association will not be used
-                if Rc::weak_count(&entity.rc) != 0 {
+                if Rc::weak_count(&entity.0) != 0 {
                     // this if statement errs on the side of caution:
                     // it's possible that the weak count will not be zero from a
                     // Volatile looking at this, in which case it will create a
@@ -322,21 +384,19 @@ impl PersistentState {
         for (_, tagged_entities_in_layer) in tagged_entities.iter_mut() {
             for tagged_entity in tagged_entities_in_layer.iter_mut() {
                 for maybe_weak in tagged_entity.e.save_entity_references() {
-                    if let None = maybe_weak {
-                        tagged_entity.refs.push(None);
-                        continue;
-                    }
-                    let weak = maybe_weak.unwrap();
-                    let strong = weak.upgrade();
-                    if strong.is_none() {
-                        // this is referring to something which has died
-                        tagged_entity.refs.push(None);
-                    } else {
-                        let p = PersistentEntity {
-                            rc: strong.unwrap(),
-                        };
-                        let tag = lookup_tag.get(&p).unwrap();
-                        tagged_entity.refs.push(Some(*tag));
+                    match maybe_weak {
+                        MaybePersistentRef::None => tagged_entity.refs.push(Tag::None),
+                        MaybePersistentRef::Despawned => tagged_entity.refs.push(Tag::Despawned),
+                        MaybePersistentRef::Some(weak) => {
+                            let strong = weak.0.upgrade();
+                            if strong.is_none() {
+                                tagged_entity.refs.push(Tag::Despawned);
+                            } else {
+                                let p = PersistentEntity(strong.unwrap());
+                                let tag = lookup_tag.get(&p).unwrap();
+                                tagged_entity.refs.push(Tag::Some(*tag));
+                            }
+                        }
                     }
                 }
             }
@@ -365,7 +425,7 @@ macro_rules! debug_assert_layers_rc_sanity {
                 let mut good = true;
                 $layers.values().for_each(|layer| {
                     layer.iter().for_each(|entity| {
-                        if Rc::strong_count(&entity.rc) != 1 {
+                        if Rc::strong_count(&entity.0) != 1 {
                             good = false;
                         }
                     })
@@ -408,7 +468,7 @@ impl PersistentStateTemp {
             type Value = BTreeMap<String, Vec<TaggedPersistent>>;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("map with scheme specific for persistent entities")
+                formatter.write_str("map with schema specific for persistent entities")
             }
 
             fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
@@ -430,7 +490,7 @@ impl PersistentStateTemp {
         for (_layer, tagged_entities_in_layer) in tagged_entities.iter() {
             for tagged_entity in tagged_entities_in_layer.iter() {
                 for maybe_tag in tagged_entity.refs.iter() {
-                    if let Some(tag) = maybe_tag {
+                    if let Tag::Some(tag) = maybe_tag {
                         referenced_tags.insert(*tag);
                     }
                 }
@@ -455,15 +515,16 @@ impl PersistentStateTemp {
             let mut entities_in_layer: Vec<PersistentEntity> = Vec::new();
             for tagged_entity in tagged_entities_in_layer.into_iter() {
                 let p = tagged_entity.e;
-                let refs: Vec<Option<PersistentRef>> = tagged_entity
+                let refs: Vec<MaybePersistentRef> = tagged_entity
                     .refs
                     .iter()
                     .map(|r| match r {
-                        Some(tag) => {
-                            let r = Rc::downgrade(&lookup_entity.get(tag).unwrap().rc);
-                            Some(r)
+                        Tag::Some(u) => {
+                            let r = Rc::downgrade(&lookup_entity.get(u).unwrap().0);
+                            MaybePersistentRef::Some(PersistentRef(r))
                         }
-                        None => None,
+                        Tag::Despawned => MaybePersistentRef::Despawned,
+                        Tag::None => MaybePersistentRef::None,
                     })
                     .collect();
                 p.load_entity_references(refs);
@@ -508,6 +569,8 @@ impl Drop for GameState {
 }
 
 impl GameState {
+    pub const GOAL_FPS: f32 = 120f32;
+
     /// intended to be used with save() and load().
     #[allow(dead_code)]
     fn gen_save_file_path(game_name: &'static str) -> String {
@@ -616,9 +679,7 @@ impl GameState {
                 "Spawn of volatile to unregistered layer: {}",
                 layer
             ))
-            .push(VolatileEntity {
-                rc: Rc::new(Cell::new(Some(e))),
-            });
+            .push(VolatileEntity(Rc::new(Cell::new(Some(e)))));
     }
 
     /// spawn a persistent entity to a render layer
@@ -630,9 +691,7 @@ impl GameState {
                 "Spawn of persistent to unregistered layer: {}",
                 layer
             ))
-            .push(PersistentEntity {
-                rc: Rc::new(Cell::new(Some(e))),
-            });
+            .push(PersistentEntity(Rc::new(Cell::new(Some(e)))));
     }
 
     pub fn get_volatiles(&self, layer: &'static str) -> &Vec<VolatileEntity> {
@@ -654,7 +713,7 @@ impl GameState {
     where
         F: Fn(&mut Self, sdl2::event::Event) -> Result<bool, String>,
     {
-        let seconds_per_frame = std::time::Duration::from_secs_f32(1f32 / 120f32);
+        let seconds_per_frame = std::time::Duration::from_secs_f32(1f32 / Self::GOAL_FPS);
         'outer: loop {
             let start = std::time::Instant::now();
             while let Some(event) = self.event_pump.poll_event() {
@@ -725,7 +784,7 @@ impl GameState {
                         let mut r = e.apply_spawns();
                         if !r.alive {
                             debug_assert!(
-                                Rc::strong_count(&e.rc) == 1,
+                                Rc::strong_count(&e.0) == 1,
                                 "only the game state is allowed strong references to entities. \
                             inter-entity references should be weak. this possibly leaks"
                             );
@@ -742,7 +801,7 @@ impl GameState {
                     let mut r = e.apply_spawns();
                     if !r.alive {
                         debug_assert!(
-                            Rc::strong_count(&e.rc) == 1,
+                            Rc::strong_count(&e.0) == 1,
                             "only the game state is allowed strong references to entities. \
                         inter-entity references should be weak. this possibly leaks"
                         );
@@ -767,7 +826,7 @@ impl GameState {
                         .map(Some)
                         .map(Cell::new)
                         .map(Rc::new)
-                        .map(|rc| PersistentEntity { rc })
+                        .map(|rc| PersistentEntity(rc))
                         .collect();
                 layer.append(&mut spawned_as_entities);
             }
@@ -781,7 +840,7 @@ impl GameState {
                         .map(Some)
                         .map(Cell::new)
                         .map(Rc::new)
-                        .map(|rc| VolatileEntity { rc })
+                        .map(|rc| VolatileEntity(rc))
                         .collect();
                 layer.append(&mut spawned_as_entities);
             }
