@@ -1,168 +1,478 @@
-use serde::ser::SerializeMap;
-use std::{cell::Cell, rc::Rc};
+use core::panic;
+use downcast_rs::{impl_downcast, Downcast};
+use serde::ser::{SerializeMap, SerializeStruct};
+use std::{
+    cell::Cell,
+    collections::{BTreeMap, HashMap, HashSet},
+    rc::Rc,
+    rc::Weak,
+};
 
 extern crate sdl2;
 
-// anything which is part of the game loop which is not saved. e.g. particle effect
-pub trait Volatile {
+pub struct PersistentSpawnChanges {
+    /// false indicates that this instance should be removed from the game.
+    pub alive: bool,
+    /// the spawns into the game, and the render layers they are added to.
+    pub volatile_spawns: Vec<(&'static str, Vec<VolatileSpawn>)>,
+    /// same as volatile_spawns, but for PersistentSpawn instead
+    pub persistent_spawns: Vec<(&'static str, Vec<PersistentSpawn>)>,
+}
+
+pub struct VolatileSpawnChanges {
+    pub alive: bool,
+    pub volatile_spawns: Vec<(&'static str, Vec<VolatileSpawn>)>,
+}
+
+/// anything which is part of the game loop and is not saved. e.g. particle effect.
+pub trait Volatile: Downcast {
+    /// second thing to happen per frame (preceded by sdl event handling)\
     /// generate a change in self (rate), which is stored and applied later in this frame.\
     /// note: the rate should not be part of the save file, only the current state.
     fn generate_rate(&mut self, state: &GameState);
 
-    /// apply the rate which was previously generated.\
-    /// first return value is false iff self should be removed from the game\
-    /// second return value is a vector of elements to add to the game\
-    /// and which layers they belong to\
-    fn apply_rate(&mut self) -> (bool, Vec<(String, Vec<Entity>)>);
+    /// third thing to happen per frame\
+    /// apply the rate which was previously generated
+    fn apply_rate(&mut self);
 
-    /// draw to the screen
-    /// window_size is the size of the canvas
+    /// fourth thing to happen per frame\
+    fn apply_spawns(&self) -> VolatileSpawnChanges {
+        // default impl is spawns nothing and alive forever
+        VolatileSpawnChanges {
+            alive: true,
+            volatile_spawns: Vec::new(),
+        }
+    }
+
+    /// last thing to happen per frame\
+    /// draw to the screen\
+    /// `window_size` is the size of the `canvas`
     fn render(&self, canvas: &mut sdl2::render::WindowCanvas, window_size: (u32, u32));
 }
+impl_downcast!(Volatile);
 
 /// anything updated in the game loop and saved as part of the save file
 #[typetag::serde(tag = "type")]
-pub trait Persistent: Volatile {}
+pub trait Persistent: Downcast {
+    /// first thing to happen per frame\
+    /// generate a change in self (rate), which is stored and applied later in this frame.\
+    /// note: the rate should not be part of the save file, only the current state.
+    fn generate_rate(&mut self, state: &GameState);
 
-pub enum Entity {
-    /// `Taken` is used internally to satisfy the borrow checker. Typically never
-    /// use.
-    // For example, from the perspective of an Entity with generate_rate being
-    // called upon it, if it looks at the state arg, it will find that in place
-    // of itself is a Taken. That way there isn't a mutable ref to self (first) arg,
-    // and a immutable ref to self (second, state arg) at the same time.
-    Taken,
-    Volatile(Box<dyn Volatile>),
-    Persistent(Box<dyn Persistent>),
-}
+    /// second thing to happen per frame\
+    /// apply the rate which was previously generated
+    fn apply_rate(&mut self);
 
-impl Default for Entity {
-    fn default() -> Self {
-        Entity::Taken
-    }
-}
-
-impl Volatile for Entity {
-    fn generate_rate(&mut self, state: &GameState) {
-        match self {
-            Entity::Volatile(v) => v.generate_rate(state),
-            Entity::Persistent(p) => p.generate_rate(state),
-            Entity::Taken => panic!("generate_rate on Taken"),
+    /// third thing to happen per frame\
+    fn apply_spawns(&self) -> PersistentSpawnChanges {
+        // default impl is spawns nothing and alive forever
+        PersistentSpawnChanges {
+            alive: true,
+            volatile_spawns: Vec::new(),
+            persistent_spawns: Vec::new(),
         }
     }
 
-    fn apply_rate(&mut self) -> (bool, Vec<(String, Vec<Entity>)>) {
-        match self {
-            Entity::Volatile(v) => v.apply_rate(),
-            Entity::Persistent(p) => p.apply_rate(),
-            Entity::Taken => panic!("apply_rate on Taken"),
+    /// last thing to happen per frame\
+    /// draw to the screen\
+    /// `window_size` is the size of the `canvas`
+    fn render(&self, canvas: &mut sdl2::render::WindowCanvas, window_size: (u32, u32));
+
+    /// references to Persistent objects which need to be saved and loaded.\
+    /// if the weak reference element has "died" and is cleanup up, then this\
+    /// is seen as a None element on load_entity_references
+    fn save_entity_references(&self) -> Vec<Option<PersistentRef>> {
+        Vec::new()
+    }
+
+    /// same number of elements is given here as was returned by save_entity_references
+    fn load_entity_references(&mut self, v: Vec<Option<PersistentRef>>) {
+        if !v.is_empty() {
+            panic!("persistent entity references provided to instance that doesn't take any");
         }
+    }
+}
+
+impl_downcast!(Persistent);
+
+// helper type used internally. shared pointer to Volatile
+// Rc: there are strong references from game state to each entity,
+// and weak reference between entities
+// Cell, Option: provides interior mutability for each instance.
+// Box: since the size is not known at compile time.
+pub struct VolatileEntity {
+    pub rc: Rc<Cell<Option<Box<dyn Volatile>>>>,
+}
+
+// functions forward to Volatile
+impl VolatileEntity {
+    fn generate_rate(&self, state: &GameState) {
+        let mut e = self.rc.take().unwrap();
+        e.generate_rate(state);
+        self.rc.set(Some(e));
+    }
+
+    fn apply_rate(&self) {
+        let mut e = self.rc.take().unwrap();
+        e.apply_rate();
+        self.rc.set(Some(e));
+    }
+
+    fn apply_spawns(&self) -> VolatileSpawnChanges {
+        let e = self.rc.take().unwrap();
+        let r = e.apply_spawns();
+        self.rc.set(Some(e));
+        r
     }
 
     fn render(&self, canvas: &mut sdl2::render::WindowCanvas, window_size: (u32, u32)) {
-        match self {
-            Entity::Volatile(v) => v.render(canvas, window_size),
-            Entity::Persistent(p) => p.render(canvas, window_size),
-            Entity::Taken => panic!("render on Taken"),
+        let e = self.rc.take().unwrap();
+        e.render(canvas, window_size);
+        self.rc.set(Some(e));
+    }
+}
+
+// helper type used internally. shared pointer to persistent
+pub struct PersistentEntity {
+    pub rc: Rc<Cell<Option<Box<dyn Persistent>>>>,
+}
+
+// functions forward to Persistent
+impl PersistentEntity {
+    fn clone(&self) -> Self {
+        PersistentEntity {
+            rc: self.rc.clone(),
         }
     }
-}
 
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct LayersWrapper {
-    // all things which are part of the game loop. associates layer name with
-    // entities in that layer
-    #[serde(
-        serialize_with = "LayersWrapper::serialize_layers",
-        deserialize_with = "LayersWrapper::deserialize_layers"
-    )]
-    pub layers: std::collections::BTreeMap<String, Vec<Rc<Cell<Entity>>>>,
-}
-
-impl LayersWrapper {
-    fn new(layer_names: &'static [&'static str]) -> Self {
-        let layers: std::collections::BTreeMap<String, Vec<Rc<Cell<Entity>>>> = layer_names
-            .iter()
-            .map(|key| ((*key).to_owned(), Vec::new()))
-            .collect();
-        Self { layers }
+    fn generate_rate(&self, state: &GameState) {
+        let mut e = self.rc.take().unwrap();
+        e.generate_rate(state);
+        self.rc.set(Some(e));
     }
 
+    fn apply_rate(&self) {
+        let mut e = self.rc.take().unwrap();
+        e.apply_rate();
+        self.rc.set(Some(e));
+    }
+
+    fn apply_spawns(&self) -> PersistentSpawnChanges {
+        let e = self.rc.take().unwrap();
+        let r = e.apply_spawns();
+        self.rc.set(Some(e));
+        r
+    }
+
+    fn render(&self, canvas: &mut sdl2::render::WindowCanvas, window_size: (u32, u32)) {
+        let e = self.rc.take().unwrap();
+        e.render(canvas, window_size);
+        self.rc.set(Some(e));
+    }
+
+    fn save_entity_references(&self) -> Vec<Option<PersistentRef>> {
+        let e = self.rc.take().unwrap();
+        let r = e.save_entity_references();
+        self.rc.set(Some(e));
+        r
+    }
+
+    fn load_entity_references(&self, v: Vec<Option<PersistentRef>>) {
+        let mut e = self.rc.take().unwrap();
+        e.load_entity_references(v);
+        self.rc.set(Some(e));
+    }
+}
+
+// hash and equality operators based on pointer address for use in unordered set
+// map when loading and saving
+impl PartialEq for PersistentEntity {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.rc, &other.rc)
+    }
+}
+
+impl Eq for PersistentEntity {}
+
+impl std::hash::Hash for PersistentEntity {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let ptr = &*self.rc as *const _ as usize;
+        ptr.hash(state);
+    }
+}
+
+/// inter-persistent entity reference
+pub type PersistentRef = Weak<Cell<Option<Box<dyn Persistent>>>>;
+pub type PersistentSpawn = Box<dyn Persistent>;
+pub type VolatileRef = Weak<Cell<Option<Box<dyn Volatile>>>>;
+pub type VolatileSpawn = Box<dyn Volatile>;
+
+// used internally for PersistentState serialize and deserialize
+struct TaggedPersistent {
+    // the subject persistent entity. it takes a clone of the Rc the game state has
+    e: PersistentEntity,
+    // the id for this entity
+    tag: u64,
+    // the tags that this entity points to.
+    // none indicates that the PersistentRef was no longer valid
+    refs: Vec<Option<u64>>,
+}
+
+impl serde::Serialize for TaggedPersistent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("TaggedPersistent", 3)?;
+        let e = self.e.rc.take().unwrap();
+        state.serialize_field("e", &e)?;
+        self.e.rc.set(Some(e));
+        state.serialize_field("tag", &self.tag)?;
+        state.serialize_field("refs", &self.refs)?;
+        state.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for TaggedPersistent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct TaggedPersistentHelper {
+            e: Box<dyn Persistent>,
+            tag: u64,
+            refs: Vec<Option<u64>>,
+        }
+
+        let helper: TaggedPersistentHelper = serde::de::Deserialize::deserialize(deserializer)?;
+        Ok(TaggedPersistent {
+            e: PersistentEntity {
+                rc: Rc::new(Cell::new(Some(helper.e))),
+            },
+            tag: helper.tag,
+            refs: helper.refs,
+        })
+    }
+}
+
+// section of GameState that has saveable things
+#[derive(serde::Serialize)]
+struct PersistentState {
+    // associates layer name with persistent entities in that layer
+    #[serde(
+        serialize_with = "PersistentState::serialize_layers",
+        deserialize_with = "PersistentState::deserialize_layers"
+    )]
+    pub persistent_layers: BTreeMap<&'static str, Vec<PersistentEntity>>,
+}
+
+impl PersistentState {
+    fn new(layer_names: &'static [&'static str]) -> Self {
+        let persistent_layers: BTreeMap<&'static str, Vec<PersistentEntity>> =
+            layer_names.iter().map(|key| (*key, Vec::new())).collect();
+        Self { persistent_layers }
+    }
+
+    // saving has linear time complexity with the number of elements
     fn serialize_layers<S>(
-        layers: &std::collections::BTreeMap<String, Vec<Rc<Cell<Entity>>>>,
+        layers: &BTreeMap<&'static str, Vec<PersistentEntity>>,
         serializer: S,
     ) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         let mut state = serializer.serialize_map(Some(layers.len()))?;
-        for (key, entities) in layers {
-            // takes all persistent entities from the layer and serializes them,
-            // then return them back into their cells
-            let mut persistent_entities: Vec<Box<dyn Persistent>> = Vec::new();
-            let mut persistent_entities_return: Vec<&Cell<Entity>> = Vec::new();
+        let mut next_tag: u64 = 0;
 
-            for entity_cell in entities.iter() {
-                let entity = entity_cell.take();
-                match entity {
-                    Entity::Volatile(_) => {
-                        entity_cell.set(entity); // return immediately
+        let mut tagged_entities: BTreeMap<&'static str, Vec<TaggedPersistent>> = BTreeMap::new();
+
+        // associates entities with their tags. for time complexity later
+        let mut lookup_tag: HashMap<PersistentEntity, u64> = HashMap::new();
+
+        // for all entities in the layers get a rc clone (serde requires data to
+        // be owned), and set a tag uniquely identifying PersistentEntities
+        for (key, entities) in layers {
+            let mut tagged_entities_in_layer: Vec<TaggedPersistent> = Vec::new();
+            for entity in entities.iter() {
+                // create the lookup association, but don't bother if it's
+                // guarenteed that this association will not be used
+                if Rc::weak_count(&entity.rc) != 0 {
+                    // this if statement errs on the side of caution:
+                    // it's possible that the weak count will not be zero from a
+                    // Volatile looking at this, in which case it will create a
+                    // association that's not used (only persistent ->
+                    // persistent weak ref is saved and loaded), but that's
+                    // fine. this check doesn't really matter anyway
+                    lookup_tag.insert(entity.clone(), next_tag);
+                }
+
+                tagged_entities_in_layer.push(TaggedPersistent {
+                    e: entity.clone(),
+                    tag: next_tag,
+                    refs: Vec::new(), // populated in next step
+                });
+                next_tag += 1;
+            }
+
+            tagged_entities.insert(key, tagged_entities_in_layer);
+        }
+
+        // next pass sets the refs to their tags
+        for (_, tagged_entities_in_layer) in tagged_entities.iter_mut() {
+            for tagged_entity in tagged_entities_in_layer.iter_mut() {
+                for maybe_weak in tagged_entity.e.save_entity_references() {
+                    if let None = maybe_weak {
+                        tagged_entity.refs.push(None);
+                        continue;
                     }
-                    Entity::Persistent(p) => {
-                        persistent_entities.push(p);
-                        persistent_entities_return.push(entity_cell);
+                    let weak = maybe_weak.unwrap();
+                    let strong = weak.upgrade();
+                    if strong.is_none() {
+                        // this is referring to something which has died
+                        tagged_entity.refs.push(None);
+                    } else {
+                        let p = PersistentEntity {
+                            rc: strong.unwrap(),
+                        };
+                        let tag = lookup_tag.get(&p).unwrap();
+                        tagged_entity.refs.push(Some(*tag));
                     }
-                    Entity::Taken => panic!("serialize on Taken"),
                 }
             }
-
-            state.serialize_entry(key, &persistent_entities)?;
-
-            for (persistent_entity, cell) in persistent_entities
-                .into_iter()
-                .zip(persistent_entities_return)
-            {
-                let entity = Entity::Persistent(persistent_entity);
-                cell.set(entity);
-            }
         }
+
+        // do serialization
+        for (k, v) in tagged_entities.into_iter() {
+            state.serialize_entry(&k, &v)?;
+        }
+
         state.end()
     }
+}
 
+// this is a PersistentState, but a temporary during deserialization. it uses String instead of str
+#[derive(serde::Deserialize)]
+struct PersistentStateTemp {
+    #[serde(deserialize_with = "PersistentStateTemp::deserialize_layers")]
+    pub persistent_layers: BTreeMap<String, Vec<PersistentEntity>>,
+}
+
+macro_rules! debug_assert_layers_rc_sanity {
+    ($layers:expr) => {
+        debug_assert!(
+            {
+                let mut good = true;
+                $layers.values().for_each(|layer| {
+                    layer.iter().for_each(|entity| {
+                        if Rc::strong_count(&entity.rc) != 1 {
+                            good = false;
+                        }
+                    })
+                });
+                good
+            },
+            "only the game state is allowed strong references to entities. \
+            inter-entity references should be weak. this possibly leaks"
+        );
+    };
+}
+
+impl PersistentStateTemp {
+    fn replace(&mut self, state: &mut PersistentState) -> Result<(), String> {
+        if !self
+            .persistent_layers
+            .keys()
+            .eq(state.persistent_layers.keys())
+        {
+            return Err("loaded save file doesn't contain correct render layers".to_owned());
+        }
+
+        debug_assert_layers_rc_sanity!(&state.persistent_layers);
+        for (k, to) in state.persistent_layers.iter_mut() {
+            let from = self.persistent_layers.get_mut(k.to_owned()).unwrap();
+            std::mem::swap(to, from);
+        }
+        Ok(())
+    }
+
+    // loading has same time complexity as saving
     fn deserialize_layers<'de, D>(
         deserializer: D,
-    ) -> Result<std::collections::BTreeMap<String, Vec<Rc<Cell<Entity>>>>, D::Error>
+    ) -> Result<BTreeMap<String, Vec<PersistentEntity>>, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        struct LayerStateLayersVisitor;
-        impl<'de> serde::de::Visitor<'de> for LayerStateLayersVisitor {
-            type Value = std::collections::BTreeMap<String, Vec<Rc<Cell<Entity>>>>;
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = BTreeMap<String, Vec<TaggedPersistent>>;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("a map with render layer keys, and values for persistent entities within those layers")
+                formatter.write_str("map with scheme specific for persistent entities")
             }
 
             fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
             where
                 M: serde::de::MapAccess<'de>,
             {
-                let mut layers = std::collections::BTreeMap::new();
-
-                while let Some((key, persistent_entities)) =
-                    map.next_entry::<String, Vec<Box<dyn Persistent>>>()?
-                {
-                    let entities = persistent_entities
-                        .into_iter()
-                        .map(|p| Rc::new(Cell::new(Entity::Persistent(p))))
-                        .collect();
-                    layers.insert(key, entities);
+                let mut layers = BTreeMap::new();
+                while let Some((key, tagged_entities_in_layer)) = map.next_entry()? {
+                    layers.insert(key, tagged_entities_in_layer);
                 }
                 Ok(layers)
             }
         }
 
-        deserializer.deserialize_map(LayerStateLayersVisitor)
+        let tagged_entities = deserializer.deserialize_map(Visitor)?;
+
+        // all persistent entities have tags. just look at which ones are used
+        let mut referenced_tags: HashSet<u64> = HashSet::new();
+        for (_layer, tagged_entities_in_layer) in tagged_entities.iter() {
+            for tagged_entity in tagged_entities_in_layer.iter() {
+                for maybe_tag in tagged_entity.refs.iter() {
+                    if let Some(tag) = maybe_tag {
+                        referenced_tags.insert(*tag);
+                    }
+                }
+            }
+        }
+
+        let mut lookup_entity: HashMap<u64, PersistentEntity> = HashMap::new();
+
+        // associates tags with the entities. for time complexity later
+        for (_layer, tagged_entities_in_layer) in tagged_entities.iter() {
+            for tagged_entity in tagged_entities_in_layer.iter() {
+                if referenced_tags.get(&tagged_entity.tag).is_some() {
+                    lookup_entity.insert(tagged_entity.tag, tagged_entity.e.clone());
+                }
+            }
+        }
+
+        // recreate the references based on the tags
+        let mut layers: BTreeMap<String, Vec<PersistentEntity>> = BTreeMap::new();
+
+        for (layer, tagged_entities_in_layer) in tagged_entities.into_iter() {
+            let mut entities_in_layer: Vec<PersistentEntity> = Vec::new();
+            for tagged_entity in tagged_entities_in_layer.into_iter() {
+                let p = tagged_entity.e;
+                let refs: Vec<Option<PersistentRef>> = tagged_entity
+                    .refs
+                    .iter()
+                    .map(|r| match r {
+                        Some(tag) => {
+                            let r = Rc::downgrade(&lookup_entity.get(tag).unwrap().rc);
+                            Some(r)
+                        }
+                        None => None,
+                    })
+                    .collect();
+                p.load_entity_references(refs);
+                entities_in_layer.push(p);
+            }
+            layers.insert(layer.to_owned(), entities_in_layer);
+        }
+
+        Ok(layers)
     }
 }
 
@@ -172,7 +482,10 @@ pub struct GameState {
 
     // all things which are part of the game loop. associates layer name with
     // entities in that layer
-    layer_wrapper: LayersWrapper,
+    persistent_state: PersistentState,
+
+    // associates layer name with volatile entities in that layer
+    volatile_layers: BTreeMap<&'static str, Vec<VolatileEntity>>,
 
     // this is kept track of and always matches the size of canvas. not sure
     // what sort of sys calls happen under the hood for SDL_GetWindowSize. this
@@ -185,6 +498,13 @@ pub struct GameState {
     canvas: sdl2::render::WindowCanvas,
     _sdl_video_subsystem: sdl2::VideoSubsystem,
     _sdl_context: sdl2::Sdl,
+}
+
+impl Drop for GameState {
+    fn drop(&mut self) {
+        debug_assert_layers_rc_sanity!(&self.persistent_state.persistent_layers);
+        debug_assert_layers_rc_sanity!(&self.volatile_layers);
+    }
 }
 
 impl GameState {
@@ -234,11 +554,16 @@ impl GameState {
         canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
         let event_pump = sdl_context.event_pump()?;
 
-        let layers = LayersWrapper::new(layer_names);
+        let persistent_state = PersistentState::new(layer_names);
+
+        // same init as persistent_layers
+        let volatile_layers: BTreeMap<&'static str, Vec<VolatileEntity>> =
+            layer_names.iter().map(|key| (*key, Vec::new())).collect();
 
         Ok(Self {
             layer_names,
-            layer_wrapper: layers,
+            persistent_state,
+            volatile_layers,
             window_width: win_size.0,
             window_height: win_size.1,
             event_pump,
@@ -248,47 +573,79 @@ impl GameState {
         })
     }
 
-    /// overrides or creates new save file
+    /// overrides or creates new save file for the persistent entities
     pub fn save(&self, save_file_path: String) -> Result<(), String> {
         let file = std::fs::File::create(save_file_path).map_err(|e| e.to_string())?;
         let mut writer = std::io::BufWriter::new(file);
-        serde_json::to_writer(&mut writer, &self.layer_wrapper).map_err(|e| e.to_string())?;
+        serde_json::to_writer(&mut writer, &self.persistent_state).map_err(|e| e.to_string())?;
         Ok(())
     }
 
-    /// reads save file and populates members
+    /// reads save file and replaces only persistent entities member\
+    /// consider first calling clear to also remove volatile entities
     pub fn load(&mut self, path: String) -> Result<(), String> {
         let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
         let reader = std::io::BufReader::new(file);
-        let incoming_layer_wrapper: LayersWrapper =
+        let mut incoming_persistent_state: PersistentStateTemp =
             serde_json::from_reader(reader).map_err(|e| e.to_string())?;
-        if !incoming_layer_wrapper
-            .layers
-            .keys()
-            .eq(self.layer_wrapper.layers.keys())
-        {
-            return Err("loaded save file doesn't contain correct render layers".to_owned());
-        }
-        self.layer_wrapper = incoming_layer_wrapper;
+        incoming_persistent_state.replace(&mut self.persistent_state)?;
         Ok(())
     }
 
-    pub fn clear_entities(&mut self) {
-        self.layer_wrapper
-            .layers
+    /// clear only persistent entities
+    pub fn clear_persistent(&mut self) {
+        debug_assert_layers_rc_sanity!(&self.persistent_state.persistent_layers);
+        self.persistent_state
+            .persistent_layers
             .values_mut()
             .for_each(|v| v.clear());
     }
 
-    pub fn spawn(&mut self, e: Entity, layer: String) {
-        if let Entity::Taken = e {
-            panic!("Can't spawn a Taken");
-        }
-        self.layer_wrapper
-            .layers
+    /// clears all entities
+    pub fn clear(&mut self) {
+        self.clear_persistent();
+        debug_assert_layers_rc_sanity!(&self.volatile_layers);
+        self.volatile_layers.values_mut().for_each(|v| v.clear());
+    }
+
+    /// spawn a volatile entity to a render layer
+    pub fn spawn_volatile(&mut self, e: VolatileSpawn, layer: &'static str) {
+        self.volatile_layers
             .get_mut(&layer)
-            .expect(&format!("Manual spawn to unregistered layer: {}", layer))
-            .push(Rc::new(Cell::new(e)));
+            .expect(&format!(
+                "Spawn of volatile to unregistered layer: {}",
+                layer
+            ))
+            .push(VolatileEntity {
+                rc: Rc::new(Cell::new(Some(e))),
+            });
+    }
+
+    /// spawn a persistent entity to a render layer
+    pub fn spawn_persistent(&mut self, e: PersistentSpawn, layer: &'static str) {
+        self.persistent_state
+            .persistent_layers
+            .get_mut(&layer)
+            .expect(&format!(
+                "Spawn of persistent to unregistered layer: {}",
+                layer
+            ))
+            .push(PersistentEntity {
+                rc: Rc::new(Cell::new(Some(e))),
+            });
+    }
+
+    pub fn get_volatiles(&self, layer: &'static str) -> &Vec<VolatileEntity> {
+        self.volatile_layers
+            .get(layer)
+            .expect(&format!("get_volatiles on unregistered layer: {}", layer))
+    }
+
+    pub fn get_persistents(&self, layer: &'static str) -> &Vec<PersistentEntity> {
+        self.persistent_state
+            .persistent_layers
+            .get(layer)
+            .expect(&format!("get_persistents on unregistered layer: {}", layer))
     }
 
     /// f is a closure that handles sdl2 events. returns false of err iff run
@@ -326,57 +683,129 @@ impl GameState {
             }
 
             // generate rates
-            self.layer_wrapper.layers.values().for_each(|layer| {
-                layer.iter().for_each(|entity_cell| {
-                    let mut entity = entity_cell.take();
+            self.persistent_state
+                .persistent_layers
+                .values()
+                .for_each(|entities| {
+                    entities.iter().for_each(|entity| {
+                        entity.generate_rate(&self);
+                    })
+                });
+            self.volatile_layers.values().for_each(|entities| {
+                entities.iter().for_each(|entity| {
                     entity.generate_rate(&self);
-                    entity_cell.set(entity);
                 })
             });
 
-            let mut spawned: Vec<(String, Vec<Entity>)> = Vec::new();
+            // apply rates
+            self.persistent_state
+                .persistent_layers
+                .values()
+                .for_each(|entities| {
+                    entities.iter().for_each(|entity| {
+                        entity.apply_rate();
+                    })
+                });
+            self.volatile_layers.values().for_each(|entities| {
+                entities.iter().for_each(|entity| {
+                    entity.apply_rate();
+                })
+            });
 
-            // apply rate - handle despawn
-            self.layer_wrapper.layers.values_mut().for_each(|layer| {
+            // apply spawns - despawn
+            let mut persistent_spawn: Vec<(&'static str, Vec<PersistentSpawn>)> = Vec::new();
+            let mut volatile_spawn: Vec<(&'static str, Vec<VolatileSpawn>)> = Vec::new();
+            self.persistent_state
+                .persistent_layers
+                .values_mut()
+                .for_each(|layer| {
+                    let len = layer.len();
+                    for i in (0..len).rev() {
+                        let e = &layer[i];
+                        let mut r = e.apply_spawns();
+                        if !r.alive {
+                            debug_assert!(
+                                Rc::strong_count(&e.rc) == 1,
+                                "only the game state is allowed strong references to entities. \
+                            inter-entity references should be weak. this possibly leaks"
+                            );
+                            layer.remove(i);
+                        }
+                        persistent_spawn.append(&mut r.persistent_spawns);
+                        volatile_spawn.append(&mut r.volatile_spawns);
+                    }
+                });
+            self.volatile_layers.values_mut().for_each(|layer| {
                 let len = layer.len();
                 for i in (0..len).rev() {
-                    let entity_cell = &layer[i];
-                    let mut entity = entity_cell.take();
-                    let mut val = entity.apply_rate();
-                    entity_cell.set(entity);
-                    if !val.0 {
+                    let e = &layer[i];
+                    let mut r = e.apply_spawns();
+                    if !r.alive {
+                        debug_assert!(
+                            Rc::strong_count(&e.rc) == 1,
+                            "only the game state is allowed strong references to entities. \
+                        inter-entity references should be weak. this possibly leaks"
+                        );
                         layer.remove(i);
                     }
-                    spawned.append(&mut val.1);
+                    volatile_spawn.append(&mut r.volatile_spawns);
                 }
             });
+
+            // new spawns
+            for s in persistent_spawn {
+                let layer = self
+                    .persistent_state
+                    .persistent_layers
+                    .get_mut(&s.0)
+                    .expect(&format!(
+                        "Entity created persistent spawn for unregistered layer: {}",
+                        &s.0
+                    ));
+                let mut spawned_as_entities =
+                    s.1.into_iter()
+                        .map(Some)
+                        .map(Cell::new)
+                        .map(Rc::new)
+                        .map(|rc| PersistentEntity { rc })
+                        .collect();
+                layer.append(&mut spawned_as_entities);
+            }
+            for s in volatile_spawn {
+                let layer = self.volatile_layers.get_mut(&s.0).expect(&format!(
+                    "Entity created volatile spawn for unregistered layer: {}",
+                    &s.0
+                ));
+                let mut spawned_as_entities =
+                    s.1.into_iter()
+                        .map(Some)
+                        .map(Cell::new)
+                        .map(Rc::new)
+                        .map(|rc| VolatileEntity { rc })
+                        .collect();
+                layer.append(&mut spawned_as_entities);
+            }
 
             self.canvas.set_draw_color(sdl2::pixels::Color::BLACK);
             self.canvas.clear();
 
-            // insert spawned elements after the new states are available
-            for s in spawned {
-                let layer = self.layer_wrapper.layers.get_mut(&s.0).expect(&format!(
-                    "Entity created spawn for unregistered layer: {}",
-                    &s.0
-                ));
-
-                let mut spawned_as_cells = s.1.into_iter().map(Cell::new).map(Rc::new).collect();
-                layer.append(&mut spawned_as_cells);
-            }
-
             // render all
             self.layer_names.iter().for_each(|layer_name| {
-                self.layer_wrapper
-                    .layers
+                self.volatile_layers
                     .get(*layer_name)
                     .unwrap()
                     .iter()
-                    .for_each(|entity_cell| {
-                        let entity = entity_cell.take();
+                    .for_each(|entity| {
                         entity.render(&mut self.canvas, (self.window_width, self.window_height));
-                        entity_cell.set(entity);
-                    })
+                    });
+                self.persistent_state
+                    .persistent_layers
+                    .get(*layer_name)
+                    .unwrap()
+                    .iter()
+                    .for_each(|entity| {
+                        entity.render(&mut self.canvas, (self.window_width, self.window_height));
+                    });
             });
 
             self.canvas.present();
