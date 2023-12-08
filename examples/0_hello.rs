@@ -1,9 +1,22 @@
+/*
+This demo ensure that the core is working.
+
+It features:
+    - animation, graphics, basic keyboard input
+    - persistent and volatile entities
+    - persistence (save file) in general
+    - persistent references which can be:
+        - circular (points to self)
+        - pointing to elements which has despawned
+*/
+
+
 extern crate game_engine;
 use core::panic;
 use rand::prelude::*;
 use std::path::PathBuf;
 
-use game_engine::{
+use game_engine::core::{
     GameState, MaybePersistentRef, Persistent, PersistentRef, PersistentRefPromotionResult,
     PersistentSpawn, PersistentSpawnChanges, Volatile, VolatileSpawn, VolatileSpawnChanges,
 };
@@ -26,6 +39,10 @@ struct PrimarySquare {
     y: f32,
     dx: f32,
     dy: f32,
+    
+    // starts at 1 on spawn and fades up to max.
+    // used for gradual increase on spawn
+    fade_in_alpha: u8,
 
     #[serde(skip)]
     x_rate: f32,
@@ -55,6 +72,7 @@ impl PrimarySquare {
             y,
             dx,
             dy,
+            fade_in_alpha: 1,
             x_rate: 0f32,
             y_rate: 0f32,
             dx_rate: 0f32,
@@ -66,7 +84,7 @@ impl PrimarySquare {
 
 #[typetag::serde]
 impl Persistent for PrimarySquare {
-    fn generate_rate(&mut self, _state: &game_engine::GameState) {
+    fn generate_rate(&mut self, _state: &GameState) {
         self.x_rate = self.dx;
         self.y_rate = self.dy;
 
@@ -91,6 +109,10 @@ impl Persistent for PrimarySquare {
     }
 
     fn apply_rate(&mut self) {
+        if self.fade_in_alpha != u8::MAX {
+            self.fade_in_alpha += 1;
+        }
+
         self.x += self.x_rate;
         self.dx += self.dx_rate;
         self.y += self.y_rate;
@@ -155,13 +177,13 @@ impl PrimarySquareTail {
             r: from.r,
             g: from.g,
             b: from.b,
-            alpha: 255,
+            alpha: from.fade_in_alpha,
         }
     }
 }
 
 impl Volatile for PrimarySquareTail {
-    fn generate_rate(&mut self, _state: &game_engine::GameState) {
+    fn generate_rate(&mut self, _state: &GameState) {
         self.x_rate = self.dx;
         self.y_rate = self.dy;
         // deviate more and more as the particles expire
@@ -224,7 +246,7 @@ impl Follower {
     const SIZE: f32 = 2.;
     const MIN_SPEED: f32 = 2.;
     const MAX_SPEED_EXCLUSIVE: f32 = 10.;
-    const COUNTDOWN_RESET: usize = 2 * GameState::GOAL_FPS as usize;
+    const COUNTDOWN_RESET: usize = 5 * GameState::GOAL_FPS as usize;
 
     fn new() -> Self {
         Self {
