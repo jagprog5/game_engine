@@ -10,9 +10,20 @@ use std::{
 
 extern crate sdl2;
 
+/// signaling for entity despawn
+pub enum LivelinessStatus {
+    Retain,
+    Despawn,
+}
+
+impl LivelinessStatus {
+    pub fn new(b: bool) -> Self {
+        if b { LivelinessStatus::Retain } else { LivelinessStatus::Despawn }
+    }
+}
+
 pub struct PersistentSpawnChanges {
-    /// false indicates that this instance should be removed from the game.
-    pub alive: bool,
+    pub alive: LivelinessStatus,
     /// the spawns into the game, and the render layers they are added to.
     pub volatile_spawns: Vec<(&'static str, Vec<VolatileSpawn>)>,
     /// same as volatile_spawns, but for PersistentSpawn instead
@@ -20,7 +31,7 @@ pub struct PersistentSpawnChanges {
 }
 
 pub struct VolatileSpawnChanges {
-    pub alive: bool,
+    pub alive: LivelinessStatus,
     pub volatile_spawns: Vec<(&'static str, Vec<VolatileSpawn>)>,
 }
 
@@ -39,15 +50,14 @@ pub trait Volatile: Downcast {
     fn apply_spawns(&self) -> VolatileSpawnChanges {
         // default impl is spawns nothing and alive forever
         VolatileSpawnChanges {
-            alive: true,
+            alive: LivelinessStatus::Retain,
             volatile_spawns: Vec::new(),
         }
     }
 
     /// last thing to happen per frame\
     /// draw to the screen\
-    /// `window_size` is the size of the `canvas`
-    fn render(&self, canvas: &mut sdl2::render::WindowCanvas, window_size: (u32, u32));
+    fn render(&self, canvas: &mut sdl2::render::WindowCanvas);
 }
 impl_downcast!(Volatile);
 
@@ -67,7 +77,7 @@ pub trait Persistent: Downcast {
     fn apply_spawns(&self) -> PersistentSpawnChanges {
         // default impl is spawns nothing and alive forever
         PersistentSpawnChanges {
-            alive: true,
+            alive: LivelinessStatus::Retain,
             volatile_spawns: Vec::new(),
             persistent_spawns: Vec::new(),
         }
@@ -75,8 +85,7 @@ pub trait Persistent: Downcast {
 
     /// last thing to happen per frame\
     /// draw to the screen\
-    /// `window_size` is the size of the `canvas`
-    fn render(&self, canvas: &mut sdl2::render::WindowCanvas, window_size: (u32, u32));
+    fn render(&self, canvas: &mut sdl2::render::WindowCanvas);
 
     /// references to Persistent objects which need to be saved
     fn save_entity_references(&self) -> Vec<MaybePersistentRef> {
@@ -120,9 +129,9 @@ impl VolatileEntity {
         r
     }
 
-    fn render(&self, canvas: &mut sdl2::render::WindowCanvas, window_size: (u32, u32)) {
+    fn render(&self, canvas: &mut sdl2::render::WindowCanvas) {
         let e = self.0.take().unwrap();
-        e.render(canvas, window_size);
+        e.render(canvas);
         self.0.set(Some(e));
     }
 }
@@ -155,9 +164,9 @@ impl PersistentEntity {
         r
     }
 
-    fn render(&self, canvas: &mut sdl2::render::WindowCanvas, window_size: (u32, u32)) {
+    fn render(&self, canvas: &mut sdl2::render::WindowCanvas) {
         let e = self.0.take().unwrap();
-        e.render(canvas, window_size);
+        e.render(canvas);
         self.0.set(Some(e));
     }
 
@@ -548,12 +557,6 @@ pub struct GameState {
     // associates layer name with volatile entities in that layer
     volatile_layers: BTreeMap<&'static str, Vec<VolatileEntity>>,
 
-    // this is kept track of and always matches the size of canvas. not sure
-    // what sort of sys calls happen under the hood for SDL_GetWindowSize. this
-    // is simpler.
-    window_width: u32,
-    window_height: u32,
-
     // sdl fundamental constructs. drop order is in stated order
     event_pump: sdl2::EventPump,
     canvas: sdl2::render::WindowCanvas,
@@ -627,8 +630,6 @@ impl GameState {
             layer_names,
             persistent_state,
             volatile_layers,
-            window_width: win_size.0,
-            window_height: win_size.1,
             event_pump,
             canvas,
             _sdl_video_subsystem: sdl_video_subsystem,
@@ -707,31 +708,19 @@ impl GameState {
             .expect(&format!("get_persistents on unregistered layer: {}", layer))
     }
 
-    /// f is a closure that handles sdl2 events. returns false of err iff run
-    /// should return
-    pub fn run<F>(&mut self, f: F) -> Result<(), String>
+    /// event_handler closure should return false (dead) or err only if run should return. it handles sdl2 events\
+    /// post_render_hook is a render function over top of the game. it may return an error string which also causes run to return\
+    pub fn run<EventHandler,PostRenderHook>(&mut self, event_handler: EventHandler, post_render_hook: PostRenderHook) -> Result<(), String>
     where
-        F: Fn(&mut Self, sdl2::event::Event) -> Result<bool, String>,
+    EventHandler: Fn(&mut Self, &sdl2::event::Event) -> Result<bool, String>,
+    PostRenderHook: Fn(&mut sdl2::render::WindowCanvas)
     {
         let seconds_per_frame = std::time::Duration::from_secs_f32(1f32 / Self::GOAL_FPS);
         'outer: loop {
             let start = std::time::Instant::now();
             while let Some(event) = self.event_pump.poll_event() {
-                // detect for window size change
-                if let sdl2::event::Event::Window {
-                    timestamp: _,
-                    window_id: _,
-                    win_event,
-                } = event
-                {
-                    if let sdl2::event::WindowEvent::SizeChanged(x_size, y_size) = win_event {
-                        self.window_width = x_size as u32;
-                        self.window_height = y_size as u32;
-                    }
-                }
-
                 // forward all event to the closure
-                match f(self, event) {
+                match event_handler(self, &event) {
                     Ok(alive) => {
                         if !alive {
                             break 'outer; // closure requested finish
@@ -782,7 +771,7 @@ impl GameState {
                     for i in (0..len).rev() {
                         let e = &layer[i];
                         let mut r = e.apply_spawns();
-                        if !r.alive {
+                        if let LivelinessStatus::Despawn = r.alive {
                             debug_assert!(
                                 Rc::strong_count(&e.0) == 1,
                                 "only the game state is allowed strong references to entities. \
@@ -799,7 +788,7 @@ impl GameState {
                 for i in (0..len).rev() {
                     let e = &layer[i];
                     let mut r = e.apply_spawns();
-                    if !r.alive {
+                    if let LivelinessStatus::Despawn = r.alive {
                         debug_assert!(
                             Rc::strong_count(&e.0) == 1,
                             "only the game state is allowed strong references to entities. \
@@ -855,7 +844,7 @@ impl GameState {
                     .unwrap()
                     .iter()
                     .for_each(|entity| {
-                        entity.render(&mut self.canvas, (self.window_width, self.window_height));
+                        entity.render(&mut self.canvas);
                     });
                 self.persistent_state
                     .persistent_layers
@@ -863,9 +852,11 @@ impl GameState {
                     .unwrap()
                     .iter()
                     .for_each(|entity| {
-                        entity.render(&mut self.canvas, (self.window_width, self.window_height));
+                        entity.render(&mut self.canvas);
                     });
             });
+
+            post_render_hook(&mut self.canvas);
 
             self.canvas.present();
 
