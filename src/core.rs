@@ -708,6 +708,10 @@ impl GameState {
             .expect(&format!("get_persistents on unregistered layer: {}", layer))
     }
 
+    pub fn window_size(&self) -> (u32, u32) {
+        self.canvas.output_size().unwrap()
+    }
+
     /// event_handler closure should return false (dead) or err only if run should return. it handles sdl2 events\
     /// post_render_hook is a render function over top of the game. it may return an error string which also causes run to return\
     pub fn run<EventHandler,PostRenderHook>(&mut self, event_handler: EventHandler, post_render_hook: PostRenderHook) -> Result<(), String>

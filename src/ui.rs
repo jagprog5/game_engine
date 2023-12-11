@@ -1,21 +1,5 @@
 extern crate sdl2;
 
-pub struct Rect {
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-}
-
-impl Rect {
-    pub fn includes(&self, point: (i32, i32)) -> bool {
-        return point.0 >= self.x
-            && point.0 <= self.x + self.width as i32
-            && point.1 >= self.y
-            && point.1 <= self.y + self.height as i32;
-    }
-}
-
 pub enum EventHandleResult {
     /// if an event is "consumed", this means that it will not be processed by other ui components.\
     /// None indicates that the event is not consumed; it will pass to other ui components in the backmost layer
@@ -27,55 +11,83 @@ pub enum EventHandleResult {
     Clear,
 }
 
+/// this includes any state which is shared between all components of the UI
+pub struct UIState {
+    /// always kept in sync with the left mouse button
+    pub button_down: bool,
+    /// always kept in sync with the size of the canvas. it is used for the
+    /// initial call to resize on ui components
+    pub window_size: (u32, u32),
+}
+
 pub struct UI {
     // layers are rendered front to back. events are only given to the backmost
     // layer, and within that layer the event is processed by each component
     // front to back
     layers: Vec<Vec<Box<dyn UIComponent>>>,
-    // this is always kept in sync with the size of the canvas. it is used for the
-    // initial call to resize on ui components
-    window_size: (u32, u32),
+    /// always kept in sync with the left mouse button
+    pub state: UIState,
 }
 
 impl UI {
+    /// the initial window size
     pub fn new(window_size: (u32, u32)) -> Self {
         Self {
             layers: Default::default(),
-            window_size,
+            state: UIState {
+                window_size,
+                button_down: false,
+            },
         }
     }
 
-    /// start the ui with a set of components
-    pub fn begin(&mut self, mut layer: Vec<Box<dyn UIComponent>>) {
+    /// push a layer to the ui
+    pub fn add(&mut self, mut layer: Vec<Box<dyn UIComponent>>) {
         if layer.is_empty() {
             return;
         }
         // initialize resize for each component on addition
         layer
             .iter_mut()
-            .for_each(|component| component.resize(self.window_size));
+            .for_each(|component| component.resize(self.state.window_size));
         self.layers.push(layer);
     }
 
     pub fn process(&mut self, e: &sdl2::event::Event) {
-        // handle change in window size, propagate to resize each component
-        if let sdl2::event::Event::Window {
-            timestamp: _,
-            window_id: _,
-            win_event,
-        } = e
-        {
-            if let sdl2::event::WindowEvent::SizeChanged(x_size, y_size) = win_event {
-                self.window_size = (*x_size as u32, *y_size as u32);
-                // propagate resize to all components
-                self.layers.iter_mut().for_each(|layer| {
-                    layer
-                        .iter_mut()
-                        .for_each(|component| component.resize(self.window_size))
-                })
+        // there is some logic which is handled by the UI as a whole, and not any
+        // individual components. this is stored in self.state
+        match e {
+            sdl2::event::Event::Window {
+                timestamp: _,
+                window_id: _,
+                win_event,
+            } => {
+                // on change of window size keep self.window_size in sync and propogate
+                // it to components
+                if let sdl2::event::WindowEvent::SizeChanged(x_size, y_size) = win_event {
+                    self.state.window_size = (*x_size as u32, *y_size as u32);
+                    // propagate resize to all components
+                    self.layers.iter_mut().for_each(|layer| {
+                        layer
+                            .iter_mut()
+                            .for_each(|component| component.resize(self.state.window_size))
+                    })
+                }
             }
-        }
+            sdl2::event::Event::MouseButtonDown { mouse_btn, .. } => {
+                if *mouse_btn == sdl2::mouse::MouseButton::Left {
+                    self.state.button_down = true;
+                }
+            }
+            sdl2::event::Event::MouseButtonUp { mouse_btn, .. } => {
+                if *mouse_btn == sdl2::mouse::MouseButton::Left {
+                    self.state.button_down = false;
+                }
+            }
+            _ => {}
+        } // end of share ui state update
 
+        // propagate events to layers
         if self.layers.is_empty() {
             // can't get last layer if empty
             return;
@@ -85,8 +97,9 @@ impl UI {
         let mut result: EventHandleResult = EventHandleResult::None;
 
         let layer_index = self.layers.len() - 1;
+        let state = &self.state;
         for component in self.layers[layer_index].iter_mut() {
-            let r = component.process(e);
+            let r = component.process(state, e);
             if let EventHandleResult::None = r {
                 continue;
             }
@@ -99,10 +112,10 @@ impl UI {
             EventHandleResult::Some(mut new_layer) => {
                 self.layers.pop();
                 if !new_layer.is_empty() {
-                    // initialize resize for each component on addition
+                    // initialize resize for each added component
                     new_layer
                         .iter_mut()
-                        .for_each(|component| component.resize(self.window_size));
+                        .for_each(|component| component.resize(self.state.window_size));
                     self.layers.push(new_layer);
                 }
             }
@@ -120,10 +133,10 @@ impl UI {
 }
 
 pub trait UIComponent {
-    /// typically called by UI instance
-    fn process(&mut self, e: &sdl2::event::Event) -> EventHandleResult;
+    /// called by UI instance
+    fn process(&mut self, ui_state: &UIState, e: &sdl2::event::Event) -> EventHandleResult;
 
-    /// typically called by UI instance
+    /// called by UI instance
     fn render(&self, canvas: &mut sdl2::render::WindowCanvas);
 
     /// this should only be called by UI. recalculate bounds for this component
@@ -133,31 +146,42 @@ pub trait UIComponent {
 
 /// buttons only recognize left click
 pub trait Button: UIComponent {
-    fn bounds(&self) -> Rect;
+    fn bounds(&self) -> sdl2::rect::Rect;
 
-    /// called repeatedly when the mouse is over the button but not being clicked
-    fn hover(&mut self);
+    /// called repeatedly if the mouse is not over the button
+    fn moved_out(&mut self);
 
-    /// called repeatedly when the mouse is over the button and being held down
+    /// called repeatedly if the mouse is over the button and left click isn't down
+    fn moved_in(&mut self);
+
+    /// called repeatedly if the mouse is over the button and left click is pressed down
     fn pressed(&mut self);
 
-    /// called once when the mouse is over the button and it is released
+    /// called once when mouse if on button and left click is released
     fn released(&mut self) -> EventHandleResult;
 
-    fn process(&mut self, event: &sdl2::event::Event) -> EventHandleResult {
+    fn process(&mut self, ui_state: &UIState, event: &sdl2::event::Event) -> EventHandleResult {
         match event {
             sdl2::event::Event::MouseMotion { x, y, .. } => {
                 let bounds = self.bounds();
-                if bounds.includes((*x, *y)) {
-                    self.hover();
+                if !bounds.contains_point((*x, *y)) {
+                    self.moved_out();
+                    return EventHandleResult::None;
                 }
+
+                if ui_state.button_down {
+                    self.pressed()
+                } else {
+                    self.moved_in()
+                }
+                return EventHandleResult::None;
             }
             sdl2::event::Event::MouseButtonDown {
                 mouse_btn, x, y, ..
             } => {
                 if *mouse_btn == sdl2::mouse::MouseButton::Left {
                     let bounds = self.bounds();
-                    if bounds.includes((*x, *y)) {
+                    if bounds.contains_point((*x, *y)) {
                         self.pressed();
                     }
                 }
@@ -167,8 +191,9 @@ pub trait Button: UIComponent {
             } => {
                 if *mouse_btn == sdl2::mouse::MouseButton::Left {
                     let bounds = self.bounds();
-                    if bounds.includes((*x, *y)) {
-                        return self.released();
+                    if bounds.contains_point((*x, *y)) {
+                        self.released();
+                        self.moved_in()
                     }
                 }
             }
