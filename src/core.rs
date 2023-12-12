@@ -1,5 +1,6 @@
 use core::panic;
 use downcast_rs::{impl_downcast, Downcast};
+use sdl2::render::WindowCanvas;
 use serde::ser::{SerializeMap, SerializeStruct};
 use std::{
     cell::Cell,
@@ -57,7 +58,7 @@ pub trait Volatile: Downcast {
 
     /// last thing to happen per frame\
     /// draw to the screen\
-    fn render(&self, canvas: &mut sdl2::render::WindowCanvas);
+    fn render(&self, canvas: &mut WindowCanvas);
 }
 impl_downcast!(Volatile);
 
@@ -85,7 +86,7 @@ pub trait Persistent: Downcast {
 
     /// last thing to happen per frame\
     /// draw to the screen\
-    fn render(&self, canvas: &mut sdl2::render::WindowCanvas);
+    fn render(&self, canvas: &mut WindowCanvas);
 
     /// references to Persistent objects which need to be saved
     fn save_entity_references(&self) -> Vec<MaybePersistentRef> {
@@ -101,7 +102,6 @@ pub trait Persistent: Downcast {
 }
 impl_downcast!(Persistent);
 
-// helper type used internally. shared pointer to Volatile
 // Rc: there are strong references from game state to each entity,
 // and weak reference between entities
 // Cell, Option: provides interior mutability for each instance.
@@ -129,14 +129,14 @@ impl VolatileEntity {
         r
     }
 
-    fn render(&self, canvas: &mut sdl2::render::WindowCanvas) {
+    fn render(&self, canvas: &mut WindowCanvas) {
         let e = self.0.take().unwrap();
         e.render(canvas);
         self.0.set(Some(e));
     }
 }
 
-// helper type used internally. shared pointer to persistent
+// shared pointer to persistent
 pub struct PersistentEntity(pub Rc<Cell<Option<Box<dyn Persistent>>>>);
 
 // functions forward to Persistent
@@ -164,7 +164,7 @@ impl PersistentEntity {
         r
     }
 
-    fn render(&self, canvas: &mut sdl2::render::WindowCanvas) {
+    fn render(&self, canvas: &mut WindowCanvas) {
         let e = self.0.take().unwrap();
         e.render(canvas);
         self.0.set(Some(e));
@@ -327,10 +327,10 @@ impl<'de> serde::Deserialize<'de> for TaggedPersistent {
     }
 }
 
-// section of GameState that has saveable things
+/// section of GameState that has saveable things
 #[derive(serde::Serialize)]
 struct PersistentState {
-    // associates layer name with persistent entities in that layer
+    /// associates layer name with persistent entities in that layer
     #[serde(
         serialize_with = "PersistentState::serialize_layers",
         deserialize_with = "PersistentState::deserialize_layers"
@@ -547,19 +547,17 @@ impl PersistentStateTemp {
 }
 
 pub struct GameState {
-    // render order of layers
+    /// render order of layers
     layer_names: &'static [&'static str],
 
-    // all things which are part of the game loop. associates layer name with
-    // entities in that layer
     persistent_state: PersistentState,
 
-    // associates layer name with volatile entities in that layer
+    /// associates layer name with volatile entities in that layer
     volatile_layers: BTreeMap<&'static str, Vec<VolatileEntity>>,
 
-    // sdl fundamental constructs. drop order is in stated order
+    // sdl fundamentals. drop order is in stated order
     event_pump: sdl2::EventPump,
-    canvas: sdl2::render::WindowCanvas,
+    pub canvas: WindowCanvas,
     _sdl_video_subsystem: sdl2::VideoSubsystem,
     _sdl_context: sdl2::Sdl,
 }
@@ -619,10 +617,7 @@ impl GameState {
             .map_err(|e| e.to_string())?;
         canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
         let event_pump = sdl_context.event_pump()?;
-
         let persistent_state = PersistentState::new(layer_names);
-
-        // same init as persistent_layers
         let volatile_layers: BTreeMap<&'static str, Vec<VolatileEntity>> =
             layer_names.iter().map(|key| (*key, Vec::new())).collect();
 
@@ -708,16 +703,12 @@ impl GameState {
             .expect(&format!("get_persistents on unregistered layer: {}", layer))
     }
 
-    pub fn window_size(&self) -> (u32, u32) {
-        self.canvas.output_size().unwrap()
-    }
-
     /// event_handler closure should return false (dead) or err only if run should return. it handles sdl2 events\
     /// post_render_hook is a render function over top of the game. it may return an error string which also causes run to return\
     pub fn run<EventHandler,PostRenderHook>(&mut self, event_handler: EventHandler, post_render_hook: PostRenderHook) -> Result<(), String>
     where
     EventHandler: Fn(&mut Self, &sdl2::event::Event) -> Result<bool, String>,
-    PostRenderHook: Fn(&mut sdl2::render::WindowCanvas)
+    PostRenderHook: Fn(&mut WindowCanvas)
     {
         let seconds_per_frame = std::time::Duration::from_secs_f32(1f32 / Self::GOAL_FPS);
         'outer: loop {

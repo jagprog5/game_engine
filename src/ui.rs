@@ -1,55 +1,77 @@
+use sdl2::{
+    render::{TextureCreator, WindowCanvas},
+    video::WindowContext,
+};
+
 extern crate sdl2;
 
-pub enum EventHandleResult {
+pub enum EventHandleResult<'t> {
     /// if an event is "consumed", this means that it will not be processed by other ui components.\
     /// None indicates that the event is not consumed; it will pass to other ui components in the backmost layer
     None,
     /// for removal or replacement of current layer\
     /// Some indicates that the event is consumed and the backmost ui layer is removed, and replaced with the contained value only if not empty.
-    Some(Vec<Box<dyn UIComponent>>),
+    Some(Vec<Box<dyn UIComponent<'t> + 't>>),
     /// indicates event is consumed and that all levels of the UI should be exited
     Clear,
 }
 
-/// this includes any state which is shared between all components of the UI
+/// when events are processed, shared info between all UI components within a UI
 pub struct UIState {
     /// always kept in sync with the left mouse button
     pub button_down: bool,
     /// always kept in sync with the size of the canvas. it is used for the
-    /// initial call to resize on ui components
+    /// calls to resize on ui components
     pub window_size: (u32, u32),
 }
 
-pub struct UI {
+/// t if the lifetime of the texture creator. it is used throughout. this is needed
+/// since UI components needs to re-render on window resize (think render a different
+/// font size, etc.)
+pub struct UI<'t> {
     // layers are rendered front to back. events are only given to the backmost
     // layer, and within that layer the event is processed by each component
     // front to back
-    layers: Vec<Vec<Box<dyn UIComponent>>>,
+    layers: Vec<Vec<Box<dyn UIComponent<'t> + 't>>>,
+
+    // given to UI components so fonts, etc can be re-rendered on resize
+    texture_creator: &'t TextureCreator<WindowContext>,
+
     /// always kept in sync with the left mouse button
     pub state: UIState,
+
+    pub ttf_context: sdl2::ttf::Sdl2TtfContext,
 }
 
-impl UI {
-    /// the initial window size
-    pub fn new(window_size: (u32, u32)) -> Self {
-        Self {
+impl<'t> UI<'t> {
+    pub fn new(
+        canvas: &WindowCanvas,
+        texture_creator: &'t TextureCreator<WindowContext>,
+    ) -> Result<Self, String> {
+        Ok(Self {
             layers: Default::default(),
+            texture_creator,
             state: UIState {
-                window_size,
+                window_size: canvas.output_size().unwrap(),
                 button_down: false,
             },
-        }
+            ttf_context: sdl2::ttf::init().map_err(|e| e.to_string())?,
+        })
     }
 
     /// push a layer to the ui
-    pub fn add(&mut self, mut layer: Vec<Box<dyn UIComponent>>) {
+    pub fn add(&mut self, mut layer: Vec<Box<dyn UIComponent<'t> + 't>>) {
         if layer.is_empty() {
             return;
         }
         // initialize resize for each component on addition
-        layer
-            .iter_mut()
-            .for_each(|component| component.resize(self.state.window_size));
+        layer.iter_mut().for_each(|component| {
+            component.resize(
+                self.state.window_size,
+                &self.ttf_context,
+                self.texture_creator,
+            )
+        });
         self.layers.push(layer);
     }
 
@@ -62,15 +84,19 @@ impl UI {
                 window_id: _,
                 win_event,
             } => {
-                // on change of window size keep self.window_size in sync and propogate
+                // on change of window size keep self.window_size in sync and propagate
                 // it to components
                 if let sdl2::event::WindowEvent::SizeChanged(x_size, y_size) = win_event {
                     self.state.window_size = (*x_size as u32, *y_size as u32);
                     // propagate resize to all components
                     self.layers.iter_mut().for_each(|layer| {
-                        layer
-                            .iter_mut()
-                            .for_each(|component| component.resize(self.state.window_size))
+                        layer.iter_mut().for_each(|component| {
+                            component.resize(
+                                self.state.window_size,
+                                &self.ttf_context,
+                                &self.texture_creator,
+                            )
+                        })
                     })
                 }
             }
@@ -94,12 +120,11 @@ impl UI {
         }
 
         // result of consumed event
-        let mut result: EventHandleResult = EventHandleResult::None;
+        let mut result = EventHandleResult::None;
 
         let layer_index = self.layers.len() - 1;
-        let state = &self.state;
         for component in self.layers[layer_index].iter_mut() {
-            let r = component.process(state, e);
+            let r: EventHandleResult = component.process(&self.state, e);
             if let EventHandleResult::None = r {
                 continue;
             }
@@ -109,15 +134,9 @@ impl UI {
 
         match result {
             EventHandleResult::None => {}
-            EventHandleResult::Some(mut new_layer) => {
+            EventHandleResult::Some(new_layer) => {
                 self.layers.pop();
-                if !new_layer.is_empty() {
-                    // initialize resize for each added component
-                    new_layer
-                        .iter_mut()
-                        .for_each(|component| component.resize(self.state.window_size));
-                    self.layers.push(new_layer);
-                }
+                self.add(new_layer);
             }
             EventHandleResult::Clear => {
                 self.layers.clear();
@@ -125,27 +144,33 @@ impl UI {
         }
     }
 
-    pub fn render(&self, canvas: &mut sdl2::render::WindowCanvas) {
+    pub fn render(&self, canvas: &mut WindowCanvas) {
         self.layers
             .iter()
             .for_each(|layer| layer.iter().for_each(|component| component.render(canvas)));
     }
 }
 
-pub trait UIComponent {
+pub trait UIComponent<'t> {
     /// called by UI instance
-    fn process(&mut self, ui_state: &UIState, e: &sdl2::event::Event) -> EventHandleResult;
+    fn process(&mut self, ui_state: &UIState, e: &sdl2::event::Event) -> EventHandleResult<'t>;
 
     /// called by UI instance
-    fn render(&self, canvas: &mut sdl2::render::WindowCanvas);
+    fn render(&self, canvas: &mut WindowCanvas);
 
-    /// this should only be called by UI. recalculate bounds for this component
-    /// when it is added to the UI and on window size change.
-    fn resize(&mut self, window_size: (u32, u32));
+    /// this should only be called by UI. recalculate bounds for this component and render any graphics.\
+    /// this is called when it is initially added to the ui and
+    /// each time the window changes size.
+    fn resize(
+        &mut self,
+        window_size: (u32, u32),
+        state: &sdl2::ttf::Sdl2TtfContext,
+        texture_creator: &'t TextureCreator<WindowContext>,
+    );
 }
 
 /// buttons only recognize left click
-pub trait Button: UIComponent {
+pub trait Button<'t>: UIComponent<'t> {
     fn bounds(&self) -> sdl2::rect::Rect;
 
     /// called repeatedly if the mouse is not over the button
@@ -158,9 +183,9 @@ pub trait Button: UIComponent {
     fn pressed(&mut self);
 
     /// called once when mouse if on button and left click is released
-    fn released(&mut self) -> EventHandleResult;
+    fn released(&mut self) -> EventHandleResult<'t>;
 
-    fn process(&mut self, ui_state: &UIState, event: &sdl2::event::Event) -> EventHandleResult {
+    fn process(&mut self, ui_state: &UIState, event: &sdl2::event::Event) -> EventHandleResult<'t> {
         match event {
             sdl2::event::Event::MouseMotion { x, y, .. } => {
                 let bounds = self.bounds();
@@ -192,8 +217,9 @@ pub trait Button: UIComponent {
                 if *mouse_btn == sdl2::mouse::MouseButton::Left {
                     let bounds = self.bounds();
                     if bounds.contains_point((*x, *y)) {
-                        self.released();
-                        self.moved_in()
+                        let r = self.released();
+                        self.moved_in();
+                        return r;
                     }
                 }
             }
