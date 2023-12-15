@@ -1,5 +1,6 @@
-use std::path::Path;
+use std::{num::NonZeroUsize, path::Path, rc::Rc};
 
+use lru::LruCache;
 use sdl2::{
     render::{TextureCreator, WindowCanvas},
     ttf::{Font, Sdl2TtfContext},
@@ -17,6 +18,8 @@ pub enum EventHandleResult<'sdl> {
     Some(Vec<Box<dyn UIComponent<'sdl> + 'sdl>>),
     /// indicates event is consumed and that all levels of the UI should be exited
     Clear,
+    /// indicates that the game should exit
+    Quit,
 }
 
 /// when events are processed, shared info between all UI components within a UI
@@ -36,9 +39,8 @@ pub struct UI<'sdl> {
     // front to back
     layers: Vec<Vec<Box<dyn UIComponent<'sdl> + 'sdl>>>,
 
-    ttf_context: &'sdl Sdl2TtfContext,
     texture_creator: &'sdl TextureCreator<WindowContext>,
-    font_manager: FontManager<'sdl>,
+    font_manager: FontCache<'sdl>,
 
     /// always kept in sync with the left mouse button
     state: UIState,
@@ -57,8 +59,7 @@ impl<'sdl> UI<'sdl> {
                 window_size: canvas.output_size().unwrap(),
                 button_down: false,
             },
-            ttf_context,
-            font_manager: FontManager::new(16, ttf_context, texture_creator),
+            font_manager: FontCache::new(16, ttf_context),
         })
     }
 
@@ -71,7 +72,6 @@ impl<'sdl> UI<'sdl> {
         layer.iter_mut().for_each(|component| {
             component.resize(
                 self.state.window_size,
-                &self.ttf_context,
                 self.texture_creator,
                 &mut self.font_manager,
             )
@@ -79,7 +79,8 @@ impl<'sdl> UI<'sdl> {
         self.layers.push(layer);
     }
 
-    pub fn process(&mut self, e: &sdl2::event::Event) {
+    /// returns false if run is complete
+    pub fn process(&mut self, e: &sdl2::event::Event) -> bool {
         // there is some logic which is handled by the UI as a whole, and not any
         // individual components. this is stored in self.state
         match e {
@@ -97,7 +98,6 @@ impl<'sdl> UI<'sdl> {
                         layer.iter_mut().for_each(|component| {
                             component.resize(
                                 self.state.window_size,
-                                &self.ttf_context,
                                 &self.texture_creator,
                                 &mut self.font_manager,
                             )
@@ -121,7 +121,7 @@ impl<'sdl> UI<'sdl> {
         // propagate events to last layer
         let layer = match self.layers.last_mut() {
             Some(layer) => layer,
-            None => return, // can't get last layer if empty
+            None => return true, // can't get last layer if empty
         };
 
         // result of consumed event
@@ -145,7 +145,10 @@ impl<'sdl> UI<'sdl> {
             EventHandleResult::Clear => {
                 self.layers.clear();
             }
+            EventHandleResult::Quit => return false,
         }
+
+        true
     }
 
     pub fn render(&self, canvas: &mut WindowCanvas) {
@@ -168,9 +171,8 @@ pub trait UIComponent<'sdl> {
     fn resize(
         &mut self,
         window_size: (u32, u32),
-        state: &'sdl sdl2::ttf::Sdl2TtfContext,
         texture_creator: &'sdl TextureCreator<WindowContext>,
-        font_manager: &mut FontManager,
+        font_cache: &mut FontCache,
     );
 }
 
@@ -239,57 +241,34 @@ pub trait Button<'sdl>: UIComponent<'sdl> {
     }
 }
 
-/// caches Font and FontSize pairs, only up to n of them are cached
-/// n should be a small number (e.g. 10)
-pub struct FontManager<'sdl> {
-    // vector of pairs, with the (font path, font size) associated with the loaded font object.
-    // backmost is most recently retrieved
-    v: Vec<((&'static str, u16), Box<Font<'sdl, 'static>>)>,
-
-    // number of fonts + font sizes to cache. least recently used
-    n: usize,
-
+pub struct FontCache<'sdl> {
+    cache: LruCache<(String, u16), Rc<Font<'sdl, 'static>>>,
     ttf_context: &'sdl sdl2::ttf::Sdl2TtfContext,
-    texture_creator: &'sdl TextureCreator<WindowContext>,
 }
 
-impl<'sdl> FontManager<'sdl> {
-    pub fn new(
-        n: usize,
-        ttf_context: &'sdl sdl2::ttf::Sdl2TtfContext,
-        texture_creator: &'sdl TextureCreator<WindowContext>,
-    ) -> Self {
-        assert!(n != 0);
+impl<'sdl> FontCache<'sdl> {
+    pub fn new(capacity: usize, ttf_context: &'sdl sdl2::ttf::Sdl2TtfContext) -> Self {
+        assert!(capacity != 0);
         Self {
-            v: Vec::new(),
-            n,
+            cache: LruCache::new(NonZeroUsize::new(capacity).unwrap()),
             ttf_context,
-            texture_creator,
         }
     }
 
-    pub fn get<'a>(&'a mut self, font_path: &'static str, font_size: u16) -> &'a Font<'sdl, 'static> {
-        // iterate throught most recently used to least recently used
-
-
-        for elem in self.v.iter().rev() {
-            if elem.0 .0 == font_path && elem.0 .1 == font_size {
-                return &*elem.1; // the element already exists
-            }
+    /// get and maybe load a font if it's not in the cache./
+    /// weak ref can safely be unwrapped if there has not yet been another call to get
+    pub fn get(&mut self, font_path: String, font_size: u16) -> Rc<Font<'sdl, 'static>> {
+        if let Some(rc) = self.cache.get(&(font_path.clone(), font_size)) {
+            return rc.clone();
         }
 
-        
-        // it doesn't already exist. generate it
-        if self.v.len() >= self.n {
-            self.v.remove(0);
-        }
-
-        let font = self
-            .ttf_context
-            .load_font(Path::new(&font_path), font_size)
-            .unwrap();
-        
-        self.v.push(((font_path, font_size), Box::new(font)));
-        &*self.v.last().unwrap().1
+        // does not already exist
+        let font = Rc::new(
+            self.ttf_context
+                .load_font(Path::new(&font_path), font_size)
+                .unwrap(),
+        );
+        self.cache.put((font_path, font_size), font.clone());
+        font
     }
 }
