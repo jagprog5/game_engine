@@ -5,7 +5,7 @@ use std::{
 
 use game_engine::{
     core::GameState,
-    ui::{Button, EventHandleResult, UIComponent, UIState, UI},
+    ui::{Button, EventHandleResult, UIComponent, UIState, UI, FontManager},
 };
 use sdl2::{
     pixels::Color,
@@ -22,30 +22,33 @@ enum FocusState {
     Pressed,
 }
 
-// #[derive(PartialEq, Eq)]
-// enum ButtonPosition {
-//     NewGame,
-// }
+#[derive(PartialEq, Eq)]
+// indicates the look, position, and action for ExampleButton
+enum ExampleButtonType {
+    NewGame,
+    Quit,
+}
 
+impl ExampleButtonType {
+    pub fn text(&self) -> &'static str {
+        match self {
+            ExampleButtonType::NewGame => "New Game",
+            ExampleButtonType::Quit => "Quit",
+        }
+    }
+}
 
-struct ExampleButton<'t> {
-    // the text to render
-    text: &'static str,
-
-    // path of font to use when rendering text\
-    // the process of loading a font and rendering the text happens whenever a button
-    // is resized (this also includes on first addition to the UI). this happens for each
-    // button on screen as this is the simplest. todo consider caching fonts
-    font_path: String,
-
+struct ExampleButton<'sdl> {
     // rendered text. swapped out per call to resize
-    rendered_text: Option<Texture<'t>>,
+    rendered_text: Option<Texture<'sdl>>,
 
     bound: Rect,
     focus_state: FocusState,
+
+    which: ExampleButtonType,
 }
 
-impl<'t> ExampleButton<'t> {
+impl<'sdl> ExampleButton<'sdl> {
     const IDLE_BACKGROUND: Color = Color::RGBA(100, 100, 100, 30);
     const HOVERED_BACKGROUND: Color = Color::RGBA(100, 100, 100, 50);
     const PRESSED_BACKGROUND: Color = Color::RGBA(100, 100, 100, 80);
@@ -53,27 +56,26 @@ impl<'t> ExampleButton<'t> {
     const BUTTON_HEIGHT: u16 = 20;
     const BORDER_WIDTH: u16 = 2;
 
-    fn new(text: &'static str, font_path: String) -> Self {
+    fn new(which: ExampleButtonType) -> Self {
         Self {
-            text,
-            font_path,
             rendered_text: None,
             // these bounds will never be used (replaced on resize when added to UI),
             // but just in case this places it off screen. Rect::contains_point is
             // inclusive
             bound: Rect::new(-1, -1, 0, 0),
             focus_state: FocusState::Idle,
+            which,
         }
     }
 }
 
-impl<'t> UIComponent<'t> for ExampleButton<'t> {
+impl<'sdl> UIComponent<'sdl> for ExampleButton<'sdl> {
     fn process(
         &mut self,
         ui_state: &UIState,
         e: &sdl2::event::Event,
-    ) -> EventHandleResult<'t> {
-        Button::<'t>::process(self, ui_state, e)
+    ) -> EventHandleResult<'sdl> {
+        Button::<'sdl>::process(self, ui_state, e)
     }
 
     fn render(&self, canvas: &mut WindowCanvas) {
@@ -91,8 +93,9 @@ impl<'t> UIComponent<'t> for ExampleButton<'t> {
     fn resize(
         &mut self,
         window_size: (u32, u32),
-        ttf_context: &sdl2::ttf::Sdl2TtfContext,
-        texture_creator: &'t TextureCreator<WindowContext>,
+        ttf_context: &'sdl sdl2::ttf::Sdl2TtfContext,
+        texture_creator: &'sdl TextureCreator<WindowContext>,
+        font_manager: &mut FontManager,
     ) {
         // load the font with a specified height
         let font = ttf_context
@@ -107,7 +110,6 @@ impl<'t> UIComponent<'t> for ExampleButton<'t> {
             .blended(Color::RGBA(255, 255, 255, 255))
             .unwrap();
 
-        let texture_creator = texture_creator.clone();
         let texture = texture_creator.create_texture_from_surface(&surface).unwrap();
 
         let text_width = texture.query().width;
@@ -122,7 +124,7 @@ impl<'t> UIComponent<'t> for ExampleButton<'t> {
     }
 }
 
-impl<'t> Button<'t> for ExampleButton<'t> {
+impl<'sdl> Button<'sdl> for ExampleButton<'sdl> {
     fn bounds(&self) -> Rect {
         self.bound
     }
@@ -139,7 +141,7 @@ impl<'t> Button<'t> for ExampleButton<'t> {
         self.focus_state = FocusState::Pressed;
     }
 
-    fn released(&mut self) -> EventHandleResult<'t> {
+    fn released(&mut self) -> EventHandleResult<'sdl> {
         println!("released");
         EventHandleResult::Clear
     }
@@ -148,6 +150,7 @@ impl<'t> Button<'t> for ExampleButton<'t> {
 fn main() -> Result<(), String> {
     let mut state = GameState::new("ui with layers of buttons", (800u32, 600u32), &[])?;
     let texture_creator = state.canvas.texture_creator();
+    let ttf_context = sdl2::ttf::init().map_err(|e| e.to_string())?;
 
     let mut initial_buttons: Vec<Box<dyn UIComponent>> = Vec::new();
 
@@ -159,7 +162,7 @@ fn main() -> Result<(), String> {
 
     initial_buttons.push(Box::new(ExampleButton::new("go_left", font_path.clone())));
     initial_buttons.push(Box::new(ExampleButton::new("go_right", font_path)));
-    let mut ui = UI::new(&state.canvas, &texture_creator)?;
+    let mut ui = UI::new(&state.canvas, &ttf_context, &texture_creator)?;
     ui.add(initial_buttons);
 
     let ui_cell = Cell::new(Option::Some(ui));

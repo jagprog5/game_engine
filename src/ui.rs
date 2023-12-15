@@ -1,17 +1,20 @@
+use std::path::Path;
+
 use sdl2::{
     render::{TextureCreator, WindowCanvas},
+    ttf::{Font, Sdl2TtfContext},
     video::WindowContext,
 };
 
 extern crate sdl2;
 
-pub enum EventHandleResult<'t> {
+pub enum EventHandleResult<'sdl> {
     /// if an event is "consumed", this means that it will not be processed by other ui components.\
     /// None indicates that the event is not consumed; it will pass to other ui components in the backmost layer
     None,
     /// for removal or replacement of current layer\
     /// Some indicates that the event is consumed and the backmost ui layer is removed, and replaced with the contained value only if not empty.
-    Some(Vec<Box<dyn UIComponent<'t> + 't>>),
+    Some(Vec<Box<dyn UIComponent<'sdl> + 'sdl>>),
     /// indicates event is consumed and that all levels of the UI should be exited
     Clear,
 }
@@ -25,28 +28,27 @@ pub struct UIState {
     pub window_size: (u32, u32),
 }
 
-/// t if the lifetime of the texture creator. it is used throughout. this is needed
-/// since UI components needs to re-render on window resize (think render a different
-/// font size, etc.)
-pub struct UI<'t> {
+/// sdl is the lifetime of various borrowed structs. this includes the texture_creator and the ttf context.
+/// they will be needed through the lifetime of this ui instance
+pub struct UI<'sdl> {
     // layers are rendered front to back. events are only given to the backmost
     // layer, and within that layer the event is processed by each component
     // front to back
-    layers: Vec<Vec<Box<dyn UIComponent<'t> + 't>>>,
+    layers: Vec<Vec<Box<dyn UIComponent<'sdl> + 'sdl>>>,
 
-    // given to UI components so fonts, etc can be re-rendered on resize
-    texture_creator: &'t TextureCreator<WindowContext>,
+    ttf_context: &'sdl Sdl2TtfContext,
+    texture_creator: &'sdl TextureCreator<WindowContext>,
+    font_manager: FontManager<'sdl>,
 
     /// always kept in sync with the left mouse button
-    pub state: UIState,
-
-    pub ttf_context: sdl2::ttf::Sdl2TtfContext,
+    state: UIState,
 }
 
-impl<'t> UI<'t> {
+impl<'sdl> UI<'sdl> {
     pub fn new(
         canvas: &WindowCanvas,
-        texture_creator: &'t TextureCreator<WindowContext>,
+        ttf_context: &'sdl Sdl2TtfContext,
+        texture_creator: &'sdl TextureCreator<WindowContext>,
     ) -> Result<Self, String> {
         Ok(Self {
             layers: Default::default(),
@@ -55,12 +57,13 @@ impl<'t> UI<'t> {
                 window_size: canvas.output_size().unwrap(),
                 button_down: false,
             },
-            ttf_context: sdl2::ttf::init().map_err(|e| e.to_string())?,
+            ttf_context,
+            font_manager: FontManager::new(16, ttf_context, texture_creator),
         })
     }
 
     /// push a layer to the ui
-    pub fn add(&mut self, mut layer: Vec<Box<dyn UIComponent<'t> + 't>>) {
+    pub fn add(&mut self, mut layer: Vec<Box<dyn UIComponent<'sdl> + 'sdl>>) {
         if layer.is_empty() {
             return;
         }
@@ -70,6 +73,7 @@ impl<'t> UI<'t> {
                 self.state.window_size,
                 &self.ttf_context,
                 self.texture_creator,
+                &mut self.font_manager,
             )
         });
         self.layers.push(layer);
@@ -95,6 +99,7 @@ impl<'t> UI<'t> {
                                 self.state.window_size,
                                 &self.ttf_context,
                                 &self.texture_creator,
+                                &mut self.font_manager,
                             )
                         })
                     })
@@ -113,17 +118,16 @@ impl<'t> UI<'t> {
             _ => {}
         } // end of share ui state update
 
-        // propagate events to layers
-        if self.layers.is_empty() {
-            // can't get last layer if empty
-            return;
-        }
+        // propagate events to last layer
+        let layer = match self.layers.last_mut() {
+            Some(layer) => layer,
+            None => return, // can't get last layer if empty
+        };
 
         // result of consumed event
         let mut result = EventHandleResult::None;
 
-        let layer_index = self.layers.len() - 1;
-        for component in self.layers[layer_index].iter_mut() {
+        for component in layer.iter_mut() {
             let r: EventHandleResult = component.process(&self.state, e);
             if let EventHandleResult::None = r {
                 continue;
@@ -151,9 +155,9 @@ impl<'t> UI<'t> {
     }
 }
 
-pub trait UIComponent<'t> {
+pub trait UIComponent<'sdl> {
     /// called by UI instance
-    fn process(&mut self, ui_state: &UIState, e: &sdl2::event::Event) -> EventHandleResult<'t>;
+    fn process(&mut self, ui_state: &UIState, e: &sdl2::event::Event) -> EventHandleResult<'sdl>;
 
     /// called by UI instance
     fn render(&self, canvas: &mut WindowCanvas);
@@ -164,28 +168,33 @@ pub trait UIComponent<'t> {
     fn resize(
         &mut self,
         window_size: (u32, u32),
-        state: &sdl2::ttf::Sdl2TtfContext,
-        texture_creator: &'t TextureCreator<WindowContext>,
+        state: &'sdl sdl2::ttf::Sdl2TtfContext,
+        texture_creator: &'sdl TextureCreator<WindowContext>,
+        font_manager: &mut FontManager,
     );
 }
 
 /// buttons only recognize left click
-pub trait Button<'t>: UIComponent<'t> {
+pub trait Button<'sdl>: UIComponent<'sdl> {
     fn bounds(&self) -> sdl2::rect::Rect;
 
     /// called repeatedly if the mouse is not over the button
     fn moved_out(&mut self);
 
-    /// called repeatedly if the mouse is over the button and left click isn't down
+    /// called repeatedly if the mouse is over the button and left click isn'texture_creator down
     fn moved_in(&mut self);
 
     /// called repeatedly if the mouse is over the button and left click is pressed down
     fn pressed(&mut self);
 
     /// called once when mouse if on button and left click is released
-    fn released(&mut self) -> EventHandleResult<'t>;
+    fn released(&mut self) -> EventHandleResult<'sdl>;
 
-    fn process(&mut self, ui_state: &UIState, event: &sdl2::event::Event) -> EventHandleResult<'t> {
+    fn process(
+        &mut self,
+        ui_state: &UIState,
+        event: &sdl2::event::Event,
+    ) -> EventHandleResult<'sdl> {
         match event {
             sdl2::event::Event::MouseMotion { x, y, .. } => {
                 let bounds = self.bounds();
@@ -227,5 +236,60 @@ pub trait Button<'t>: UIComponent<'t> {
         }
 
         EventHandleResult::None
+    }
+}
+
+/// caches Font and FontSize pairs, only up to n of them are cached
+/// n should be a small number (e.g. 10)
+pub struct FontManager<'sdl> {
+    // vector of pairs, with the (font path, font size) associated with the loaded font object.
+    // backmost is most recently retrieved
+    v: Vec<((&'static str, u16), Box<Font<'sdl, 'static>>)>,
+
+    // number of fonts + font sizes to cache. least recently used
+    n: usize,
+
+    ttf_context: &'sdl sdl2::ttf::Sdl2TtfContext,
+    texture_creator: &'sdl TextureCreator<WindowContext>,
+}
+
+impl<'sdl> FontManager<'sdl> {
+    pub fn new(
+        n: usize,
+        ttf_context: &'sdl sdl2::ttf::Sdl2TtfContext,
+        texture_creator: &'sdl TextureCreator<WindowContext>,
+    ) -> Self {
+        assert!(n != 0);
+        Self {
+            v: Vec::new(),
+            n,
+            ttf_context,
+            texture_creator,
+        }
+    }
+
+    pub fn get<'a>(&'a mut self, font_path: &'static str, font_size: u16) -> &'a Font<'sdl, 'static> {
+        // iterate throught most recently used to least recently used
+
+
+        for elem in self.v.iter().rev() {
+            if elem.0 .0 == font_path && elem.0 .1 == font_size {
+                return &*elem.1; // the element already exists
+            }
+        }
+
+        
+        // it doesn't already exist. generate it
+        if self.v.len() >= self.n {
+            self.v.remove(0);
+        }
+
+        let font = self
+            .ttf_context
+            .load_font(Path::new(&font_path), font_size)
+            .unwrap();
+        
+        self.v.push(((font_path, font_size), Box::new(font)));
+        &*self.v.last().unwrap().1
     }
 }
