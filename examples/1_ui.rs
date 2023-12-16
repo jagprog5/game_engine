@@ -9,7 +9,7 @@ use game_engine::{
     core::GameState,
     ui::{
         standard_button::StandardButton,
-        standard_button_content::{ContentFunctional, TextContent, ImageContent},
+        standard_button_content::{ContentFunctional, TextContent, ImageContent, FitType},
         EventHandleResult, UIComponent, UI,
     },
 };
@@ -189,7 +189,7 @@ fn new_game_menu<'sdl>() -> Vec<Box<dyn UIComponent<'sdl> + 'sdl>> {
         }
     }
     let top_left_functionality = TopLeftCharacterFunctional { _mark: PhantomData };
-    let top_left_content = ImageContent::new(test_image(), Box::new(top_left_functionality));
+    let top_left_content = ImageContent::new(test_image(), Box::new(top_left_functionality), FitType::Shrink);
     let top_left_button = StandardButton::default_look(Box::new(top_left_content));
     ret.push(Box::new(top_left_button));
 
@@ -207,7 +207,7 @@ fn new_game_menu<'sdl>() -> Vec<Box<dyn UIComponent<'sdl> + 'sdl>> {
         }
     }
     let top_right_functionality = TopRightCharacterFunctional { _mark: PhantomData };
-    let top_right_content = ImageContent::new(test_image(), Box::new(top_right_functionality));
+    let top_right_content = ImageContent::new(test_image(), Box::new(top_right_functionality), FitType::Shrink);
     let top_right_button = StandardButton::default_look(Box::new(top_right_content));
     ret.push(Box::new(top_right_button));
 
@@ -225,7 +225,7 @@ fn new_game_menu<'sdl>() -> Vec<Box<dyn UIComponent<'sdl> + 'sdl>> {
         }
     }
     let bottom_left_functionality = BottomLeftCharacterFunctional { _mark: PhantomData };
-    let bottom_left_content = ImageContent::new(test_image(), Box::new(bottom_left_functionality));
+    let bottom_left_content = ImageContent::new(test_image(), Box::new(bottom_left_functionality), FitType::Shrink);
     let bottom_left_button = StandardButton::default_look(Box::new(bottom_left_content));
     ret.push(Box::new(bottom_left_button));
 
@@ -243,7 +243,7 @@ fn new_game_menu<'sdl>() -> Vec<Box<dyn UIComponent<'sdl> + 'sdl>> {
         }
     }
     let bottom_right_functionality = BottomRightCharacterFunctional { _mark: PhantomData };
-    let bottom_right_content = ImageContent::new(test_image(), Box::new(bottom_right_functionality));
+    let bottom_right_content = ImageContent::new(test_image(), Box::new(bottom_right_functionality), FitType::Shrink);
     let bottom_right_button = StandardButton::default_look(Box::new(bottom_right_content));
     ret.push(Box::new(bottom_right_button));
 

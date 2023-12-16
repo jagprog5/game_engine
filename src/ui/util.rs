@@ -72,9 +72,21 @@ pub fn render_gradient_border(
 
 /// suitable for textures with a transparent background\
 /// returns the bounds for the src texture to be drawn in
-pub fn shrink_fit(src_dim: (u32, u32), dst_dim: (u32, u32)) -> Rect {
+pub fn shrink_fit(src_dim: (u32, u32), dist_bound: Rect) -> Rect {
     let src_ratio = src_dim.0 as f32 / src_dim.1 as f32;
-    let dst_ratio = dst_dim.0 as f32 / dst_dim.1 as f32;
+    let dst_ratio = dist_bound.width() as f32 / dist_bound.height() as f32;
 
-    todo!();
+    if src_ratio < dst_ratio {
+        let y: i32 = 0;
+        let height = dist_bound.height();
+        let width = (height as f32 * src_ratio) as u32;
+        let x = (dist_bound.w - width as i32) / 2;
+        Rect::new(x + dist_bound.x, y + dist_bound.y, width, height)
+    } else {
+        let x: i32 = 0;
+        let width = dist_bound.width();
+        let height = (width as f32 / src_ratio as f32) as u32;
+        let y = (dist_bound.h - height as i32) / 2;
+        Rect::new(x + dist_bound.x, y + dist_bound.y, width, height)
+    }
 }

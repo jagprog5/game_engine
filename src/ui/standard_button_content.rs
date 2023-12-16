@@ -112,7 +112,7 @@ impl<'sdl> Content<'sdl> for TextContent<'sdl> {
 }
 
 /// how does the image's dimensions get matched to those of the content
-enum FitType {
+pub enum FitType {
     // native and simple stretch over destination
     Stretch,
     // shrink in output to match aspect ratio
@@ -158,7 +158,7 @@ impl<'sdl> Content<'sdl> for ImageContent<'sdl> {
     fn render_inner(&self, canvas: &mut WindowCanvas, bound: Rect) {
         let bound_to_use = match self.fit_type {
             FitType::Stretch => bound,
-            FitType::Shrink => shrink_fit(self.image_dims, (bound.width(), bound.height())),
+            FitType::Shrink => shrink_fit(self.image_dims, bound),
         };
         canvas
             .copy(self.rendered_image.as_ref().unwrap(), None, bound_to_use)
