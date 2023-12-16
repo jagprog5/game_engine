@@ -11,12 +11,20 @@ extern crate sdl2;
 
 pub enum EventHandleResult<'sdl> {
     /// if an event is "consumed", this means that it will not be processed by other ui components.\
-    /// None indicates that the event is not consumed; it will pass to other ui components in the backmost layer
+    /// None indicates that the event is not consumed; it will pass to other ui components in the backmost layer.
+    /// all other variant consume the events
     None,
-    /// for removal or replacement of current layer\
-    /// Some indicates that the event is consumed and the backmost ui layer is removed, and replaced with the contained value only if not empty.
-    Some(Vec<Box<dyn UIComponent<'sdl> + 'sdl>>),
-    /// indicates event is consumed and that all levels of the UI should be exited
+
+    /// exit only the current layer of the ui
+    RemoveLayer,
+
+    /// add layer. if it is empty then this does nothing
+    AddLayer(Vec<Box<dyn UIComponent<'sdl> + 'sdl>>),
+
+    /// if this is empty then it acts like RemoveLayer
+    ReplaceLayer(Vec<Box<dyn UIComponent<'sdl> + 'sdl>>),
+
+    /// all levels of the UI should be exited
     Clear,
     /// indicates that the game should exit
     Quit,
@@ -63,8 +71,10 @@ impl<'sdl> UI<'sdl> {
         })
     }
 
-    /// push a layer to the ui
-    pub fn add(&mut self, mut layer: Vec<Box<dyn UIComponent<'sdl> + 'sdl>>) {
+    fn add_modify_prior_layer<F>(&mut self, mut layer: Vec<Box<dyn UIComponent<'sdl> + 'sdl>>, f: F)
+    where
+        F: Fn(&mut Self),
+    {
         if layer.is_empty() {
             return;
         }
@@ -76,7 +86,21 @@ impl<'sdl> UI<'sdl> {
                 &mut self.font_manager,
             )
         });
+
+        f(self);
+
         self.layers.push(layer);
+    }
+
+    /// push a layer to the ui
+    pub fn add(&mut self, layer: Vec<Box<dyn UIComponent<'sdl> + 'sdl>>) {
+        self.add_modify_prior_layer(layer, |ui: &mut Self| {
+            ui.layers.last_mut().map(|prior_layer| {
+                prior_layer
+                    .iter_mut()
+                    .for_each(|component| component.reset())
+            });
+        });
     }
 
     /// returns false if run is complete
@@ -138,14 +162,27 @@ impl<'sdl> UI<'sdl> {
 
         match result {
             EventHandleResult::None => {}
-            EventHandleResult::Some(new_layer) => {
-                self.layers.pop();
-                self.add(new_layer);
-            }
+
             EventHandleResult::Clear => {
                 self.layers.clear();
             }
             EventHandleResult::Quit => return false,
+            EventHandleResult::RemoveLayer => {
+                self.layers.pop();
+            }
+            EventHandleResult::AddLayer(layer) => {
+                if !layer.is_empty() {
+                    self.add(layer);
+                }
+            }
+            EventHandleResult::ReplaceLayer(layer) => {
+                self.layers.pop();
+                if !layer.is_empty() {
+                    // don't call reset on components since it already happened
+                    // when they were added
+                    self.add_modify_prior_layer(layer, |_|{});
+                }
+            }
         }
 
         true
@@ -174,6 +211,11 @@ pub trait UIComponent<'sdl> {
         texture_creator: &'sdl TextureCreator<WindowContext>,
         font_cache: &mut FontCache,
     );
+
+    /// a special event that happens when a ui layer is added on top of the
+    /// layer that this component is a part of. this should clear any state
+    /// associated with the render look of the component
+    fn reset(&mut self) {}
 }
 
 /// buttons only recognize left click

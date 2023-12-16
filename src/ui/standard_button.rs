@@ -145,6 +145,11 @@ impl<'sdl> UIComponent<'sdl> for StandardButton<'sdl> {
             responded_dim.1,
         );
     }
+
+    fn reset(&mut self) {
+        self.focus_state = FocusState::Idle;
+        self.content.reset();
+    }
 }
 
 impl<'sdl> Button<'sdl> for StandardButton<'sdl> {

@@ -36,6 +36,9 @@ pub trait Content<'sdl> {
 
     /// where does the entire button go on the screen
     fn get_button_bound(&self, window_size: (u32, u32)) -> Rect;
+
+    /// when a layer is added on top of this one. reset state of component
+    fn reset(&mut self) {}
 }
 
 pub struct TextContent<'sdl> {

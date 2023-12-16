@@ -13,7 +13,7 @@ use game_engine::{
         EventHandleResult, UIComponent, UI,
     },
 };
-use sdl2::rect::Rect;
+use sdl2::{rect::Rect, pixels::Color};
 
 pub fn font() -> String {
     let mut font_path_buf = PathBuf::new();
@@ -46,7 +46,15 @@ fn bottom_button_bound(window_size: (u32, u32), pos: u32) -> Rect {
     Rect::new(x, y, width, height)
 }
 
-fn character_select_bound(window_size: (u32, u32), x_pos: bool, y_pos: bool) -> Rect {
+#[derive(Debug)]
+enum CharacterSelect {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+fn character_select_bound(window_size: (u32, u32), character: CharacterSelect) -> Rect {
     let spacing_x = (window_size.0 as f32 / 64f32) as u32;
 
     // height excluding bottom back button and spacing
@@ -56,8 +64,22 @@ fn character_select_bound(window_size: (u32, u32), x_pos: bool, y_pos: bool) -> 
     let width = (window_size.0 - spacing_x * 3) / 2;
     let height = (available_height - spacing_y * 3) / 2;
 
-    let x = spacing_x + if x_pos { width + spacing_x } else {0};
-    let y = spacing_y + if y_pos { height + spacing_y } else {0};
+    let right_side = match character {
+        CharacterSelect::TopLeft => false,
+        CharacterSelect::TopRight => true,
+        CharacterSelect::BottomLeft => false,
+        CharacterSelect::BottomRight => true,
+    };
+
+    let bottom = match character {
+        CharacterSelect::TopLeft => false,
+        CharacterSelect::TopRight => false,
+        CharacterSelect::BottomLeft => true,
+        CharacterSelect::BottomRight => true,
+    };
+
+    let x = spacing_x + if right_side { width + spacing_x } else {0};
+    let y = spacing_y + if bottom { height + spacing_y } else {0};
     Rect::new(x as i32, y as i32, width, height)
 }
 
@@ -68,7 +90,7 @@ fn initial_menu<'sdl>() -> Vec<Box<dyn UIComponent<'sdl> + 'sdl>> {
 
     impl<'sdl> ContentFunctional<'sdl> for NewGameButtonFunctional<'sdl> {
         fn released(&mut self) -> EventHandleResult<'sdl> {
-            EventHandleResult::Some(new_game_menu())
+            EventHandleResult::ReplaceLayer(new_game_menu())
         }
 
         fn get_button_bound(&self, window_size: (u32, u32)) -> Rect {
@@ -132,21 +154,21 @@ fn initial_menu<'sdl>() -> Vec<Box<dyn UIComponent<'sdl> + 'sdl>> {
 }
 
 fn new_game_menu<'sdl>() -> Vec<Box<dyn UIComponent<'sdl> + 'sdl>> {
+    let mut ret: Vec<Box<dyn UIComponent>> = Vec::new();
+
     struct BackButtonFunctional<'sdl> {
         _mark: PhantomData<&'sdl ()>,
     }
 
     impl<'sdl> ContentFunctional<'sdl> for BackButtonFunctional<'sdl> {
         fn released(&mut self) -> EventHandleResult<'sdl> {
-            EventHandleResult::Some(initial_menu())
+            EventHandleResult::ReplaceLayer(initial_menu())
         }
 
         fn get_button_bound(&self, window_size: (u32, u32)) -> Rect {
             bottom_button_bound(window_size, 0)
         }
     }
-
-    let mut ret: Vec<Box<dyn UIComponent>> = Vec::new();
 
     let back_functionality = BackButtonFunctional { _mark: PhantomData };
     let back_content = TextContent::new("Back".to_string(), font(), Box::new(back_functionality));
@@ -159,12 +181,11 @@ fn new_game_menu<'sdl>() -> Vec<Box<dyn UIComponent<'sdl> + 'sdl>> {
     
     impl<'sdl> ContentFunctional<'sdl> for TopLeftCharacterFunctional<'sdl> {
         fn released(&mut self) -> EventHandleResult<'sdl> {
-            println!("top left character selected");
-            EventHandleResult::None
+            EventHandleResult::AddLayer(character_selected_menu(CharacterSelect::TopLeft))
         }
         
         fn get_button_bound(&self, window_size: (u32, u32)) -> Rect {
-            character_select_bound(window_size, false, false)
+            character_select_bound(window_size, CharacterSelect::TopLeft)
         }
     }
     let top_left_functionality = TopLeftCharacterFunctional { _mark: PhantomData };
@@ -178,12 +199,11 @@ fn new_game_menu<'sdl>() -> Vec<Box<dyn UIComponent<'sdl> + 'sdl>> {
     
     impl<'sdl> ContentFunctional<'sdl> for TopRightCharacterFunctional<'sdl> {
         fn released(&mut self) -> EventHandleResult<'sdl> {
-            println!("top right character selected");
-            EventHandleResult::None
+            EventHandleResult::AddLayer(character_selected_menu(CharacterSelect::TopRight))
         }
         
         fn get_button_bound(&self, window_size: (u32, u32)) -> Rect {
-            character_select_bound(window_size, true, false)
+            character_select_bound(window_size, CharacterSelect::TopRight)
         }
     }
     let top_right_functionality = TopRightCharacterFunctional { _mark: PhantomData };
@@ -197,12 +217,11 @@ fn new_game_menu<'sdl>() -> Vec<Box<dyn UIComponent<'sdl> + 'sdl>> {
     
     impl<'sdl> ContentFunctional<'sdl> for BottomLeftCharacterFunctional<'sdl> {
         fn released(&mut self) -> EventHandleResult<'sdl> {
-            println!("bottom left character selected");
-            EventHandleResult::None
+            EventHandleResult::AddLayer(character_selected_menu(CharacterSelect::BottomLeft))
         }
         
         fn get_button_bound(&self, window_size: (u32, u32)) -> Rect {
-            character_select_bound(window_size, false, true)
+            character_select_bound(window_size, CharacterSelect::BottomLeft)
         }
     }
     let bottom_left_functionality = BottomLeftCharacterFunctional { _mark: PhantomData };
@@ -216,18 +235,65 @@ fn new_game_menu<'sdl>() -> Vec<Box<dyn UIComponent<'sdl> + 'sdl>> {
     
     impl<'sdl> ContentFunctional<'sdl> for BottomRightCharacterFunctional<'sdl> {
         fn released(&mut self) -> EventHandleResult<'sdl> {
-            println!("bottom right character selected");
-            EventHandleResult::None
+            EventHandleResult::AddLayer(character_selected_menu(CharacterSelect::BottomRight))
         }
         
         fn get_button_bound(&self, window_size: (u32, u32)) -> Rect {
-            character_select_bound(window_size, true, true)
+            character_select_bound(window_size, CharacterSelect::BottomRight)
         }
     }
     let bottom_right_functionality = BottomRightCharacterFunctional { _mark: PhantomData };
     let bottom_right_content = ImageContent::new(test_image(), Box::new(bottom_right_functionality));
     let bottom_right_button = StandardButton::default_look(Box::new(bottom_right_content));
     ret.push(Box::new(bottom_right_button));
+
+    ret
+}
+
+fn character_selected_menu<'sdl>(character: CharacterSelect) -> Vec<Box<dyn UIComponent<'sdl> + 'sdl>> {
+    let mut ret: Vec<Box<dyn UIComponent>> = Vec::new();
+
+    ret.push(Box::new(game_engine::ui::tint::Tint { color: Color::RGBA(0, 0, 0, 230) }));
+
+    struct BackButtonFunctional<'sdl> {
+        _mark: PhantomData<&'sdl ()>,
+    }
+
+    impl<'sdl> ContentFunctional<'sdl> for BackButtonFunctional<'sdl> {
+        fn released(&mut self) -> EventHandleResult<'sdl> {
+            EventHandleResult::RemoveLayer
+        }
+
+        fn get_button_bound(&self, window_size: (u32, u32)) -> Rect {
+            bottom_button_bound(window_size, 0)
+        }
+    }
+
+    let back_functionality = BackButtonFunctional { _mark: PhantomData };
+    let back_content = TextContent::new("Back".to_string(), font(), Box::new(back_functionality));
+    let back_button = StandardButton::default_look(Box::new(back_content));
+    ret.push(Box::new(back_button));
+
+    struct GoButtonFunctional<'sdl> {
+        _mark: PhantomData<&'sdl ()>,
+        character: CharacterSelect
+    }
+
+    impl<'sdl> ContentFunctional<'sdl> for GoButtonFunctional<'sdl> {
+        fn released(&mut self) -> EventHandleResult<'sdl> {
+            println!("lets go {:?}", self.character);
+            EventHandleResult::None
+        }
+
+        fn get_button_bound(&self, window_size: (u32, u32)) -> Rect {
+            bottom_button_bound(window_size, 1)
+        }
+    }
+
+    let go_functionality = GoButtonFunctional { _mark: PhantomData, character };
+    let go_content = TextContent::new("Start".to_string(), font(), Box::new(go_functionality));
+    let go_button = StandardButton::default_look(Box::new(go_content));
+    ret.push(Box::new(go_button));
 
     ret
 }
