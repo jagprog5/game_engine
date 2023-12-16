@@ -111,11 +111,11 @@ impl<'sdl> Content<'sdl> for TextContent<'sdl> {
 pub struct ImageContent<'sdl> {
     img_path: String,
     rendered_image: Option<Texture<'sdl>>,
-    functional: Box<dyn ContentFunctional<'sdl>>,
+    functional: Box<dyn ContentFunctional<'sdl> + 'sdl>,
 }
 
 impl<'sdl> ImageContent<'sdl> {
-    pub fn new(img_path: String, functional: Box<dyn ContentFunctional<'sdl>>) -> Self {
+    pub fn new(img_path: String, functional: Box<dyn ContentFunctional<'sdl> + 'sdl>) -> Self {
         Self {
             img_path,
             rendered_image: None,
