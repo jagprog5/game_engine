@@ -92,7 +92,7 @@ impl<'sdl> UIComponent<'sdl> for StandardButton<'sdl> {
             self.border_steps,
         );
 
-        self.content.render_inner(canvas, self.content_bound);
+        self.content.render(canvas, self.content_bound);
     }
 
     fn resize(
@@ -117,7 +117,7 @@ impl<'sdl> UIComponent<'sdl> for StandardButton<'sdl> {
 
         // have the content re-render its texture based on the space available
         // inside the button, not including the border. see how much space that took
-        let responded_dim = self.content.resize_inner(
+        let responded_dim = self.content.resize(
             (requested_content_bound_w, requested_content_bound_h),
             texture_creator,
             font_cache,
@@ -159,14 +159,17 @@ impl<'sdl> Button<'sdl> for StandardButton<'sdl> {
 
     fn moved_out(&mut self) {
         self.focus_state = FocusState::Idle;
+        self.content.moved_out();
     }
 
     fn moved_in(&mut self) {
         self.focus_state = FocusState::Hovered;
+        self.content.moved_in();
     }
 
     fn pressed(&mut self) {
         self.focus_state = FocusState::Pressed;
+        self.content.pressed();
     }
 
     fn released(&mut self) -> EventHandleResult<'sdl> {
