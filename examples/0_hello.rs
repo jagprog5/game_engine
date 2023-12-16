@@ -7,9 +7,8 @@ It features:
     - persistence (save file) in general
     - persistent references which can be:
         - circular (points to self)
-        - pointing to elements which has despawned
+        - pointing to elements which have despawned
 */
-
 
 extern crate game_engine;
 use core::panic;
@@ -18,7 +17,7 @@ use std::path::PathBuf;
 
 use game_engine::core::{
     GameState, MaybePersistentRef, Persistent, PersistentRef, PersistentRefPromotionResult,
-    PersistentSpawn, PersistentSpawnChanges, Volatile, VolatileSpawn, VolatileSpawnChanges,
+    PersistentSpawn, PersistentSpawnChanges, Volatile, VolatileSpawn, VolatileSpawnChanges, LivelinessStatus,
 };
 
 fn central_rand(radius: f32) -> (f32, f32) {
@@ -39,7 +38,7 @@ struct PrimarySquare {
     y: f32,
     dx: f32,
     dy: f32,
-    
+
     // starts at 1 on spawn and fades up to max.
     // used for gradual increase on spawn
     fade_in_alpha: u8,
@@ -133,14 +132,14 @@ impl Persistent for PrimarySquare {
         let mut volatile_spawns: Vec<(&'static str, Vec<VolatileSpawn>)> = Vec::new();
         volatile_spawns.push((OBJECTS, vec![Box::new(PrimarySquareTail::new(&self))]));
         PersistentSpawnChanges {
-            alive: !replace_self,
+            alive: LivelinessStatus::new(!replace_self),
             volatile_spawns,
             persistent_spawns,
         }
     }
 
     /// draw to the screen
-    fn render(&self, _canvas: &mut sdl2::render::WindowCanvas, _window_size: (u32, u32)) {
+    fn render(&self, _canvas: &mut sdl2::render::WindowCanvas) {
         // this entity drawn entirely from particle effects it emitts
     }
 }
@@ -203,12 +202,13 @@ impl Volatile for PrimarySquareTail {
 
     fn apply_spawns(&self) -> VolatileSpawnChanges {
         VolatileSpawnChanges {
-            alive: self.alpha != 0,
+            alive: LivelinessStatus::new(self.alpha != 0),
             volatile_spawns: Vec::new(),
         }
     }
 
-    fn render(&self, canvas: &mut sdl2::render::WindowCanvas, window_size: (u32, u32)) {
+    fn render(&self, canvas: &mut sdl2::render::WindowCanvas) {
+        let window_size = canvas.output_size().unwrap();
         let progress_on = (self.alpha) as f32 / 255f32; // from 1 (inclusive) to 0 (exclusive)
         let progress_off = 1f32 - progress_on;
 
@@ -400,7 +400,8 @@ impl Persistent for Follower {
         }
     }
 
-    fn render(&self, canvas: &mut sdl2::render::WindowCanvas, window_size: (u32, u32)) {
+    fn render(&self, canvas: &mut sdl2::render::WindowCanvas) {
+        let window_size = canvas.output_size().unwrap();
         canvas.set_draw_color(sdl2::pixels::Color::RGBA(255, 255, 255, 50));
         canvas
             .fill_rect(sdl2::rect::Rect::new(
@@ -445,41 +446,44 @@ fn main() -> Result<(), String> {
     } else {
         populate_initial_entities(&mut state);
     }
-    state.run(|state, event| {
-        match event {
-            sdl2::event::Event::Quit { .. }
-            | sdl2::event::Event::KeyDown {
-                keycode: Some(sdl2::keyboard::Keycode::Escape),
-                ..
-            } => return Ok(false),
-            sdl2::event::Event::KeyUp {
-                keycode: Some(sdl2::keyboard::Keycode::S),
-                ..
-            } => {
-                state.save(save_file_path.clone())?;
-                println!("manual save");
-            }
-            sdl2::event::Event::KeyUp {
-                keycode: Some(sdl2::keyboard::Keycode::L),
-                ..
-            } => {
-                if std::fs::metadata(save_file_path.clone()).is_ok() {
-                    state.load(save_file_path.clone())?;
-                    println!("manual load");
+    state.run(
+        |state, event| {
+            match event {
+                sdl2::event::Event::Quit { .. }
+                | sdl2::event::Event::KeyDown {
+                    keycode: Some(sdl2::keyboard::Keycode::Escape),
+                    ..
+                } => return Ok(false),
+                sdl2::event::Event::KeyUp {
+                    keycode: Some(sdl2::keyboard::Keycode::S),
+                    ..
+                } => {
+                    state.save(save_file_path.clone())?;
+                    println!("manual save");
                 }
+                sdl2::event::Event::KeyUp {
+                    keycode: Some(sdl2::keyboard::Keycode::L),
+                    ..
+                } => {
+                    if std::fs::metadata(save_file_path.clone()).is_ok() {
+                        state.load(save_file_path.clone())?;
+                        println!("manual load");
+                    }
+                }
+                sdl2::event::Event::KeyUp {
+                    keycode: Some(sdl2::keyboard::Keycode::R),
+                    ..
+                } => {
+                    state.clear_persistent();
+                    populate_initial_entities(state);
+                    println!("reset");
+                }
+                _ => {}
             }
-            sdl2::event::Event::KeyUp {
-                keycode: Some(sdl2::keyboard::Keycode::R),
-                ..
-            } => {
-                state.clear_persistent();
-                populate_initial_entities(state);
-                println!("reset");
-            }
-            _ => {}
-        }
-        Ok(true)
-    })?;
+            Ok(true)
+        },
+        |_| {},
+    )?;
     println!("save on exit");
     state.save(save_file_path)?;
     Ok(())

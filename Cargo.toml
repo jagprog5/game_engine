@@ -7,9 +7,10 @@ edition = "2021"
 
 [dependencies]
 serde = { version= "1.0.193", features=["derive"] }
-sdl2 = { version= "0.36.0", features=["bundled"] }
+sdl2 = { version= "0.36.0", features=["bundled", "ttf", "image"] }
 serde_json = "1.0.108"
 dirs = "5.0.1"
 rand = "0.8.5"
 typetag = "0.2.13"
 downcast-rs = "1.2.0"
+lru = "0.12.1"
