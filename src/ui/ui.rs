@@ -241,6 +241,8 @@ pub trait Button<'sdl>: UIComponent<'sdl> {
     }
 }
 
+// typically fonts are the same between ui components
+// this prevents unncessary reload (components share same font object)
 pub struct FontCache<'sdl> {
     cache: LruCache<(String, u16), Rc<Font<'sdl, 'static>>>,
     ttf_context: &'sdl sdl2::ttf::Sdl2TtfContext,
