@@ -41,6 +41,9 @@ pub trait Content<'sdl> {
 pub struct TextContent<'sdl> {
     text: String,
     font_path: String,
+
+    height: u16, // last height used to generate the font for this instance
+    rendered_text_height: u32, // the height of the texture
     rendered_text: Option<Texture<'sdl>>,
     functional: Box<dyn ContentFunctional<'sdl> + 'sdl>,
 }
@@ -54,6 +57,8 @@ impl<'sdl> TextContent<'sdl> {
         Self {
             text,
             font_path,
+            height: 0,
+            rendered_text_height: 0,
             rendered_text: None,
             functional,
         }
@@ -67,8 +72,8 @@ impl<'sdl> Content<'sdl> for TextContent<'sdl> {
         texture_creator: &'sdl TextureCreator<WindowContext>,
         font_cache: &mut FontCache,
     ) -> (u32, u32) {
-        let height: u16 = requested_size.1.try_into().unwrap();
-        let font_rc = font_cache.get(self.font_path.clone(), height);
+        self.height = requested_size.1.try_into().unwrap_or(u16::MAX);
+        let font_rc = font_cache.get(self.font_path.clone(), self.height);
         let surface = font_rc
             .render(&self.text)
             .blended(Color::RGBA(255, 255, 255, 255))
@@ -78,13 +83,19 @@ impl<'sdl> Content<'sdl> for TextContent<'sdl> {
             .create_texture_from_surface(&surface)
             .unwrap();
         let q = texture.query();
+        self.rendered_text_height = q.height;
         self.rendered_text = Some(texture);
-        (q.width, q.height)
+        (q.width, u32::from(self.height))
     }
 
     fn render_inner(&self, canvas: &mut WindowCanvas, bound: Rect) {
+        // a font point is defined as the height of the lettering.
+        // however, if seems to render some white space above and below as well.
+        // this source rectangle gets rid of that
+        let height = u32::from(self.height);
+        let y = (self.rendered_text_height / 2 - height / 2) as i32;
         canvas
-            .copy(self.rendered_text.as_ref().unwrap(), None, bound)
+            .copy(self.rendered_text.as_ref().unwrap(), Rect::new(0, y, u32::MAX, height), bound)
             .unwrap();
     }
 

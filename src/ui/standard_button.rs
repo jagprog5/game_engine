@@ -30,10 +30,10 @@ impl<'sdl> StandardButton<'sdl> {
         Self::new(
             Color::RGBA(100, 100, 100, 30),
             Color::RGBA(100, 100, 100, 100),
-            Color::RGB(200, 200, 200),
+            Color::RGB(150, 150, 150),
             Color::RGB(50, 50, 50),
-            0,
-            3,
+            15,
+            4,
             content,
         )
     }
