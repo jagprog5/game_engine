@@ -6,7 +6,7 @@ use sdl2::{
     video::WindowContext,
 };
 
-use super::{EventHandleResult, FontCache};
+use super::{EventHandleResult, FontCache, util::shrink_fit};
 
 pub trait ContentFunctional<'sdl> {
     /// what happens when the button is released
@@ -111,18 +111,30 @@ impl<'sdl> Content<'sdl> for TextContent<'sdl> {
     }
 }
 
+/// how does the image's dimensions get matched to those of the content
+enum FitType {
+    // native and simple stretch over destination
+    Stretch,
+    // shrink in output to match aspect ratio
+    Shrink
+}
+
 pub struct ImageContent<'sdl> {
     img_path: String,
+    image_dims: (u32, u32),
     rendered_image: Option<Texture<'sdl>>,
     functional: Box<dyn ContentFunctional<'sdl> + 'sdl>,
+    fit_type: FitType,
 }
 
 impl<'sdl> ImageContent<'sdl> {
-    pub fn new(img_path: String, functional: Box<dyn ContentFunctional<'sdl> + 'sdl>) -> Self {
+    pub fn new(img_path: String, functional: Box<dyn ContentFunctional<'sdl> + 'sdl>, fit_type: FitType) -> Self {
         Self {
             img_path,
+            image_dims: (0, 0),
             rendered_image: None,
             functional,
+            fit_type
         }
     }
 }
@@ -134,17 +146,22 @@ impl<'sdl> Content<'sdl> for ImageContent<'sdl> {
         texture_creator: &'sdl TextureCreator<WindowContext>,
         _font_cache: &mut FontCache,
     ) -> (u32, u32) {
-        // todo stretching / interpolation / cut off. something to make it look better with aspect ratio.
         if let None = self.rendered_image {
             self.rendered_image =
                 Some(texture_creator.load_texture(self.img_path.clone()).unwrap());
+            let q = self.rendered_image.as_ref().unwrap().query();
+            self.image_dims = (q.width, q.height);
         }
         size
     }
 
     fn render_inner(&self, canvas: &mut WindowCanvas, bound: Rect) {
+        let bound_to_use = match self.fit_type {
+            FitType::Stretch => bound,
+            FitType::Shrink => shrink_fit(self.image_dims, (bound.width(), bound.height())),
+        };
         canvas
-            .copy(self.rendered_image.as_ref().unwrap(), None, bound)
+            .copy(self.rendered_image.as_ref().unwrap(), None, bound_to_use)
             .unwrap();
     }
 
