@@ -10,8 +10,9 @@ pub enum FocusState {
     Pressed,
 }
 
-/// a standard button has a gradient border and a background color.
-/// it delegates the inner content, positioning, and release callback to the Content
+/// a standard button has a gradient border and a background color. the stuff
+/// inside the border is a Content. the content also handles the position and
+/// size for this button, as well as what happen on button release
 pub struct StandardButton<'sdl> {
     bg_idle_color: Color,
     bg_pressed_color: Color,
@@ -82,6 +83,8 @@ impl<'sdl> UIComponent<'sdl> for StandardButton<'sdl> {
 
         canvas.set_draw_color(bg_color);
 
+        self.content.render(canvas, self.content_bound);
+
         canvas.fill_rect(self.bound).unwrap();
         super::util::render_gradient_border(
             canvas,
@@ -91,8 +94,6 @@ impl<'sdl> UIComponent<'sdl> for StandardButton<'sdl> {
             self.border_width,
             self.border_steps,
         );
-
-        self.content.render(canvas, self.content_bound);
     }
 
     fn resize(
@@ -146,9 +147,17 @@ impl<'sdl> UIComponent<'sdl> for StandardButton<'sdl> {
         );
     }
 
-    fn reset(&mut self) {
-        self.focus_state = FocusState::Idle;
-        self.content.reset();
+    fn exited_layer(&mut self) {
+        Button::<'sdl>::exited_layer(self);
+        self.content.moved_out();
+    }
+
+    fn entered_layer(&mut self, mouse_position: Option<(i32, i32)>) -> bool {
+        if Button::<'sdl>::entered_layer(self, mouse_position) {
+            self.content.moved_in();
+            return true;
+        }
+        false
     }
 }
 

@@ -98,15 +98,22 @@ impl<'sdl> UI<'sdl> {
             ui.layers.last_mut().map(|prior_layer| {
                 prior_layer
                     .iter_mut()
-                    .for_each(|component| component.reset())
+                    .for_each(|component| component.exited_layer())
             });
         });
     }
 
     /// returns false if run is complete
     pub fn process(&mut self, e: &sdl2::event::Event) -> bool {
+        // the back most layer must never be empty
+        debug_assert!(self.layers.last().map_or(true, |layer| !layer.is_empty()));
+
         // there is some logic which is handled by the UI as a whole, and not any
         // individual components. this is stored in self.state
+
+        // record mouse pos for if a layer is removed.
+        let mut enter_layer_pos: Option<(i32, i32)> = None;
+
         match e {
             sdl2::event::Event::Window {
                 timestamp: _,
@@ -129,15 +136,27 @@ impl<'sdl> UI<'sdl> {
                     })
                 }
             }
-            sdl2::event::Event::MouseButtonDown { mouse_btn, .. } => {
+            sdl2::event::Event::MouseButtonDown {
+                mouse_btn, x, y, ..
+            } => {
+                enter_layer_pos = Some((*x, *y));
                 if *mouse_btn == sdl2::mouse::MouseButton::Left {
                     self.state.button_down = true;
                 }
             }
-            sdl2::event::Event::MouseButtonUp { mouse_btn, .. } => {
+            sdl2::event::Event::MouseButtonUp {
+                mouse_btn, x, y, ..
+            } => {
+                enter_layer_pos = Some((*x, *y));
                 if *mouse_btn == sdl2::mouse::MouseButton::Left {
                     self.state.button_down = false;
                 }
+            }
+            sdl2::event::Event::MouseMotion { x, y, .. } => {
+                enter_layer_pos = Some((*x, *y));
+            }
+            sdl2::event::Event::MouseWheel { x, y, .. } => {
+                enter_layer_pos = Some((*x, *y));
             }
             _ => {}
         } // end of share ui state update
@@ -160,6 +179,18 @@ impl<'sdl> UI<'sdl> {
             break;
         }
 
+        // call after layer has been removed, below
+        fn do_entered_layer<'sdl>(
+            layers: &mut Vec<Vec<Box<dyn UIComponent<'sdl> + 'sdl>>>,
+            enter_layer_pos: Option<(i32, i32)>,
+        ) {
+            layers.last_mut().map(|layer| {
+                layer
+                    .iter_mut()
+                    .for_each(|component| { component.entered_layer(enter_layer_pos); })
+            });
+        }
+
         match result {
             EventHandleResult::None => {}
 
@@ -169,6 +200,7 @@ impl<'sdl> UI<'sdl> {
             EventHandleResult::Quit => return false,
             EventHandleResult::RemoveLayer => {
                 self.layers.pop();
+                do_entered_layer(&mut self.layers, enter_layer_pos);
             }
             EventHandleResult::AddLayer(layer) => {
                 if !layer.is_empty() {
@@ -178,10 +210,11 @@ impl<'sdl> UI<'sdl> {
             EventHandleResult::ReplaceLayer(layer) => {
                 self.layers.pop();
                 if !layer.is_empty() {
-                    // don't call reset on components since it already happened
+                    // don't call exited_layer on components since it already happened
                     // when they were added
-                    self.add_modify_prior_layer(layer, |_|{});
+                    self.add_modify_prior_layer(layer, |_| {});
                 }
+                do_entered_layer(&mut self.layers, enter_layer_pos);
             }
         }
 
@@ -214,11 +247,18 @@ pub trait UIComponent<'sdl> {
 
     /// a special event that happens when a ui layer is added on top of the
     /// layer that this component is a part of. this should clear any state
-    /// associated with the render look of the component
-    fn reset(&mut self) {}
+    /// associated with rendering of the component
+    fn exited_layer(&mut self) {}
+
+    /// a special event that happens what a layer is removed from the ui.
+    /// entered_layer is called on all components of the new top level layer.\
+    /// if this occured from a mouse event, then the mouse position is given.
+    /// returns true if it influenced the state of this component
+    fn entered_layer(&mut self, _mouse_position: Option<(i32, i32)>) -> bool { false }
 }
 
-/// buttons only recognize left click
+/// this is a minimal wrapper around UIComponent which handles mouse logic. it
+/// only recognizes left click
 pub trait Button<'sdl>: UIComponent<'sdl> {
     fn bounds(&self) -> sdl2::rect::Rect;
 
@@ -231,8 +271,23 @@ pub trait Button<'sdl>: UIComponent<'sdl> {
     /// called repeatedly if the mouse is over the button and left click is pressed down
     fn pressed(&mut self);
 
-    /// called once when mouse if on button and left click is released
+    /// called once when mouse is on this button and left click is released
     fn released(&mut self) -> EventHandleResult<'sdl>;
+
+    fn exited_layer(&mut self) {
+        self.moved_out();
+    }
+
+    fn entered_layer(&mut self, mouse_position: Option<(i32, i32)>) -> bool {
+        mouse_position.map_or(false, |pos| {
+            let bounds = self.bounds();
+            if bounds.contains_point((pos.0, pos.1)) {
+                self.moved_in();
+                return true;
+            }
+            false
+        })
+    }
 
     fn process(
         &mut self,

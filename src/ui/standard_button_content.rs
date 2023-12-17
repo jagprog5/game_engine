@@ -34,9 +34,6 @@ pub trait Content<'sdl> {
     /// where does the entire button go on the screen
     fn get_button_bound(&self, window_size: (u32, u32)) -> Rect;
 
-    /// following functions are forwarded to by standard button
-    fn reset(&mut self) {}
-
     fn moved_in(&mut self) {}
 
     fn moved_out(&mut self) {}
@@ -50,13 +47,27 @@ pub struct TextContent<'sdl> {
     text: String,
     font_path: String,
 
-    height: u16,               // last height used to generate the font for this instance
-    rendered_text_height: u32, // the height of the texture
+    // last height used to generate the font point
+    height: u16,
+
+    // dimensions of texture from previous resize
+    rendered_dims: (u32, u32),
     rendered_text: Option<Texture<'sdl>>,
+
+    // simple expanding the text doesn't look right, so this always renders a
+    // slightly larger font for when the button is focused
+    focus_rendered_dims: (u32, u32),
+    focus_rendered_text: Option<Texture<'sdl>>,
+
     functional: Box<dyn ContentFunctional<'sdl> + 'sdl>,
+
+    // used to apply zoom on content
+    focus_state: FocusState,
 }
 
 impl<'sdl> TextContent<'sdl> {
+    const FOCUS_FONT_MULTIPLIER: f32 = 1.025;
+
     pub fn new(
         text: String,
         font_path: String,
@@ -66,9 +77,12 @@ impl<'sdl> TextContent<'sdl> {
             text,
             font_path,
             height: 0,
-            rendered_text_height: 0,
+            rendered_dims: (0, 0),
             rendered_text: None,
+            focus_rendered_dims: (0, 0),
+            focus_rendered_text: None,
             functional,
+            focus_state: FocusState::Idle,
         }
     }
 }
@@ -91,24 +105,78 @@ impl<'sdl> Content<'sdl> for TextContent<'sdl> {
             .create_texture_from_surface(&surface)
             .unwrap();
         let q = texture.query();
-        self.rendered_text_height = q.height;
+        self.rendered_dims = (q.width, q.height);
         self.rendered_text = Some(texture);
-        (q.width, u32::from(self.height))
+
+        let ret = (q.width, u32::from(self.height));
+
+        // same as above but for the focused text
+
+        
+        let focus_height: f32 = f32::from(self.height) * Self::FOCUS_FONT_MULTIPLIER;
+        let focus_height = if focus_height > f32::from(u16::MAX) { u16::MAX } else { focus_height as u16 };
+        let font_rc = font_cache.get(
+            self.font_path.clone(),
+            focus_height,
+        );
+        let surface = font_rc
+            .render(&self.text)
+            .blended(Color::RGBA(255, 255, 255, 255))
+            .unwrap();
+
+        let texture = texture_creator
+            .create_texture_from_surface(&surface)
+            .unwrap();
+        let q = texture.query();
+        self.focus_rendered_dims = (q.width, q.height);
+        self.focus_rendered_text = Some(texture);
+
+        ret
     }
 
     fn render(&self, canvas: &mut WindowCanvas, bound: Rect) {
+        let dims_to_use = match self.focus_state {
+            FocusState::Idle => self.rendered_dims,
+            _ => self.focus_rendered_dims,
+        };
+
+        let texture_to_use = match self.focus_state {
+            FocusState::Idle => &self.rendered_text,
+            _ => &self.focus_rendered_text,
+        };
+
         // a font point is defined as the height of the lettering.
         // however, if seems to render some white space above and below as well.
         // this source rectangle gets rid of that
-        let height = u32::from(self.height);
-        let y = (self.rendered_text_height / 2 - height / 2) as i32;
+        let y = (dims_to_use.1 as f32 - f32::from(self.height)) / 2f32;
+        let src_bound = Rect::new(0i32, y as i32, dims_to_use.0, u32::from(self.height));
+
+        // increase dst bound to match focus scaling
+        let dst_bound = match self.focus_state {
+            FocusState::Idle => bound,
+            _ => {
+                let width_expand = bound.width() as f32 * (Self::FOCUS_FONT_MULTIPLIER - 1f32);
+                let height_expand = bound.height() as f32 * (Self::FOCUS_FONT_MULTIPLIER - 1f32);
+                Rect::new((bound.x as f32 - width_expand / 2f32) as i32, (bound.y as f32 - height_expand / 2f32) as i32,
+                    bound.width() + width_expand as u32, bound.height() + height_expand as u32)
+            },
+        };
+
         canvas
-            .copy(
-                self.rendered_text.as_ref().unwrap(),
-                Rect::new(0, y, u32::MAX, height),
-                bound,
-            )
+            .copy(texture_to_use.as_ref().unwrap(), src_bound, dst_bound)
             .unwrap();
+    }
+
+    fn moved_in(&mut self) {
+        self.focus_state = FocusState::Hovered;
+    }
+
+    fn moved_out(&mut self) {
+        self.focus_state = FocusState::Idle;
+    }
+
+    fn pressed(&mut self) {
+        self.focus_state = FocusState::Pressed;
     }
 
     fn released(&mut self) -> EventHandleResult<'sdl> {
@@ -122,7 +190,7 @@ impl<'sdl> Content<'sdl> for TextContent<'sdl> {
 
 /// how does the image's dimensions get matched to those of the content
 pub enum FitType {
-    // native and simple stretch over destination
+    // naive and simple stretch over destination
     Stretch,
     // shrink in output to match aspect ratio
     Shrink,
@@ -194,12 +262,12 @@ impl<'sdl> Content<'sdl> for ImageContent<'sdl> {
             (self.image_dims.1 as f32 - border_zoom_width * 2f32) as u32,
         );
         canvas
-            .copy(self.rendered_image.as_ref().unwrap(), src_bound, bound_to_use)
+            .copy(
+                self.rendered_image.as_ref().unwrap(),
+                src_bound,
+                bound_to_use,
+            )
             .unwrap();
-    }
-
-    fn reset(&mut self) {
-        self.focus_state = FocusState::Idle;
     }
 
     fn moved_in(&mut self) {

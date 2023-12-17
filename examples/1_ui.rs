@@ -9,11 +9,11 @@ use game_engine::{
     core::GameState,
     ui::{
         standard_button::StandardButton,
-        standard_button_content::{ContentFunctional, TextContent, ImageContent, FitType},
+        standard_button_content::{ContentFunctional, FitType, ImageContent, TextContent},
         EventHandleResult, UIComponent, UI,
     },
 };
-use sdl2::{rect::Rect, pixels::Color};
+use sdl2::{pixels::Color, rect::Rect};
 
 pub fn font() -> String {
     let mut font_path_buf = PathBuf::new();
@@ -39,9 +39,11 @@ fn bottom_button_bound(window_size: (u32, u32), pos: u32) -> Rect {
     let height = window_size.1 / 8;
     let x = (window_size.0 / 2) as i32;
 
-    let y = (window_size.1 // start at bottom
-        - (pos + 1) * (window_size.1 as f32 / 32f32) as u32 // spacing
-        - (pos + 1) * (window_size.1 as f32 / 8f32) as u32 // button height
+    let y = (
+        window_size.1 // start at bottom
+        - (pos + 1) * (window_size.1 as f32 / 64f32) as u32 // spacing
+        - (pos + 1) * (window_size.1 as f32 / 8f32) as u32
+        // button height
     ) as i32;
     Rect::new(x, y, width, height)
 }
@@ -58,11 +60,15 @@ fn character_select_bound(window_size: (u32, u32), character: CharacterSelect) -
     let spacing_x = (window_size.0 as f32 / 64f32) as u32;
 
     // height excluding bottom back button and spacing
-    let available_height = window_size.1 - (window_size.1 as f32 / 32f32 + window_size.1 as f32 / 8f32) as u32;
+    let available_height =
+        window_size.1 - (window_size.1 as f32 / 64f32 + window_size.1 as f32 / 8f32) as u32;
 
     let spacing_y = (available_height as f32 / 64f32) as u32;
-    let width = (window_size.0 - spacing_x * 3) / 2;
-    let height = (available_height - spacing_y * 3) / 2;
+
+    let spacing = spacing_x.min(spacing_y);
+
+    let width = (window_size.0 - spacing * 3) / 2;
+    let height = (available_height - spacing * 3) / 2;
 
     let right_side = match character {
         CharacterSelect::TopLeft => false,
@@ -78,8 +84,8 @@ fn character_select_bound(window_size: (u32, u32), character: CharacterSelect) -
         CharacterSelect::BottomRight => true,
     };
 
-    let x = spacing_x + if right_side { width + spacing_x } else {0};
-    let y = spacing_y + if bottom { height + spacing_y } else {0};
+    let x = spacing + if right_side { width + spacing } else { 0 };
+    let y = spacing + if bottom { height + spacing } else { 0 };
     Rect::new(x as i32, y as i32, width, height)
 }
 
@@ -174,86 +180,110 @@ fn new_game_menu<'sdl>() -> Vec<Box<dyn UIComponent<'sdl> + 'sdl>> {
     let back_content = TextContent::new("Back".to_string(), font(), Box::new(back_functionality));
     let back_button = StandardButton::default_look(Box::new(back_content));
     ret.push(Box::new(back_button));
-    
+
     struct TopLeftCharacterFunctional<'sdl> {
         _mark: PhantomData<&'sdl ()>,
     }
-    
+
     impl<'sdl> ContentFunctional<'sdl> for TopLeftCharacterFunctional<'sdl> {
         fn released(&mut self) -> EventHandleResult<'sdl> {
             EventHandleResult::AddLayer(character_selected_menu(CharacterSelect::TopLeft))
         }
-        
+
         fn get_button_bound(&self, window_size: (u32, u32)) -> Rect {
             character_select_bound(window_size, CharacterSelect::TopLeft)
         }
     }
     let top_left_functionality = TopLeftCharacterFunctional { _mark: PhantomData };
-    let top_left_content = ImageContent::new(test_image(), Box::new(top_left_functionality), FitType::Shrink, 0.1f32);
+    let top_left_content = ImageContent::new(
+        test_image(),
+        Box::new(top_left_functionality),
+        FitType::Shrink,
+        0.1f32,
+    );
     let top_left_button = StandardButton::default_look(Box::new(top_left_content));
     ret.push(Box::new(top_left_button));
 
     struct TopRightCharacterFunctional<'sdl> {
         _mark: PhantomData<&'sdl ()>,
     }
-    
+
     impl<'sdl> ContentFunctional<'sdl> for TopRightCharacterFunctional<'sdl> {
         fn released(&mut self) -> EventHandleResult<'sdl> {
             EventHandleResult::AddLayer(character_selected_menu(CharacterSelect::TopRight))
         }
-        
+
         fn get_button_bound(&self, window_size: (u32, u32)) -> Rect {
             character_select_bound(window_size, CharacterSelect::TopRight)
         }
     }
     let top_right_functionality = TopRightCharacterFunctional { _mark: PhantomData };
-    let top_right_content = ImageContent::new(test_image(), Box::new(top_right_functionality), FitType::Shrink, 0.1f32);
+    let top_right_content = ImageContent::new(
+        test_image(),
+        Box::new(top_right_functionality),
+        FitType::Shrink,
+        0.1f32,
+    );
     let top_right_button = StandardButton::default_look(Box::new(top_right_content));
     ret.push(Box::new(top_right_button));
 
     struct BottomLeftCharacterFunctional<'sdl> {
         _mark: PhantomData<&'sdl ()>,
     }
-    
+
     impl<'sdl> ContentFunctional<'sdl> for BottomLeftCharacterFunctional<'sdl> {
         fn released(&mut self) -> EventHandleResult<'sdl> {
             EventHandleResult::AddLayer(character_selected_menu(CharacterSelect::BottomLeft))
         }
-        
+
         fn get_button_bound(&self, window_size: (u32, u32)) -> Rect {
             character_select_bound(window_size, CharacterSelect::BottomLeft)
         }
     }
     let bottom_left_functionality = BottomLeftCharacterFunctional { _mark: PhantomData };
-    let bottom_left_content = ImageContent::new(test_image(), Box::new(bottom_left_functionality), FitType::Shrink, 0.1f32);
+    let bottom_left_content = ImageContent::new(
+        test_image(),
+        Box::new(bottom_left_functionality),
+        FitType::Shrink,
+        0.1f32,
+    );
     let bottom_left_button = StandardButton::default_look(Box::new(bottom_left_content));
     ret.push(Box::new(bottom_left_button));
 
     struct BottomRightCharacterFunctional<'sdl> {
         _mark: PhantomData<&'sdl ()>,
     }
-    
+
     impl<'sdl> ContentFunctional<'sdl> for BottomRightCharacterFunctional<'sdl> {
         fn released(&mut self) -> EventHandleResult<'sdl> {
             EventHandleResult::AddLayer(character_selected_menu(CharacterSelect::BottomRight))
         }
-        
+
         fn get_button_bound(&self, window_size: (u32, u32)) -> Rect {
             character_select_bound(window_size, CharacterSelect::BottomRight)
         }
     }
     let bottom_right_functionality = BottomRightCharacterFunctional { _mark: PhantomData };
-    let bottom_right_content = ImageContent::new(test_image(), Box::new(bottom_right_functionality), FitType::Shrink, 0.1f32);
+    let bottom_right_content = ImageContent::new(
+        test_image(),
+        Box::new(bottom_right_functionality),
+        FitType::Shrink,
+        0.1f32,
+    );
     let bottom_right_button = StandardButton::default_look(Box::new(bottom_right_content));
     ret.push(Box::new(bottom_right_button));
 
     ret
 }
 
-fn character_selected_menu<'sdl>(character: CharacterSelect) -> Vec<Box<dyn UIComponent<'sdl> + 'sdl>> {
+fn character_selected_menu<'sdl>(
+    character: CharacterSelect,
+) -> Vec<Box<dyn UIComponent<'sdl> + 'sdl>> {
     let mut ret: Vec<Box<dyn UIComponent>> = Vec::new();
 
-    ret.push(Box::new(game_engine::ui::tint::Tint { color: Color::RGBA(0, 0, 0, 230) }));
+    ret.push(Box::new(game_engine::ui::tint::Tint {
+        color: Color::RGBA(0, 0, 0, 230),
+    }));
 
     struct BackButtonFunctional<'sdl> {
         _mark: PhantomData<&'sdl ()>,
@@ -276,7 +306,7 @@ fn character_selected_menu<'sdl>(character: CharacterSelect) -> Vec<Box<dyn UICo
 
     struct GoButtonFunctional<'sdl> {
         _mark: PhantomData<&'sdl ()>,
-        character: CharacterSelect
+        character: CharacterSelect,
     }
 
     impl<'sdl> ContentFunctional<'sdl> for GoButtonFunctional<'sdl> {
@@ -290,7 +320,10 @@ fn character_selected_menu<'sdl>(character: CharacterSelect) -> Vec<Box<dyn UICo
         }
     }
 
-    let go_functionality = GoButtonFunctional { _mark: PhantomData, character };
+    let go_functionality = GoButtonFunctional {
+        _mark: PhantomData,
+        character,
+    };
     let go_content = TextContent::new("Start".to_string(), font(), Box::new(go_functionality));
     let go_button = StandardButton::default_look(Box::new(go_content));
     ret.push(Box::new(go_button));
