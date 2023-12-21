@@ -138,7 +138,7 @@ impl<'sdl> UIComponent<'sdl> for StandardButton<'sdl> {
             responded_dim.1 + u32::from(self.border_width) * 2,
         );
 
-        // expands about center if the inner
+        // expands about center on the inner
         self.bound = Rect::new(
             center.0 - (responded_dim.0 / 2) as i32,
             center.1 - (responded_dim.1 / 2) as i32,
@@ -171,17 +171,32 @@ impl<'sdl> Button<'sdl> for StandardButton<'sdl> {
         self.content.moved_out();
     }
 
+    fn moved_in_from_enter_layer(&mut self) {
+        // do not play sound if moved in from layer removal
+        self.focus_state = FocusState::Hovered;
+        self.content.moved_in();
+    }
+
     fn moved_in(&mut self) {
+        if self.focus_state != FocusState::Hovered {
+            // just moved in, started this frame
+            println!("play hover sound");
+        }
         self.focus_state = FocusState::Hovered;
         self.content.moved_in();
     }
 
     fn pressed(&mut self) {
+        if self.focus_state != FocusState::Pressed {
+            // just pressed, started this frame
+            println!("play press sound");
+        }
         self.focus_state = FocusState::Pressed;
         self.content.pressed();
     }
 
     fn released(&mut self) -> EventHandleResult<'sdl> {
+        self.focus_state = FocusState::Hovered; // needed to not play hover sound again
         self.content.released()
     }
 }

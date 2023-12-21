@@ -265,8 +265,13 @@ pub trait Button<'sdl>: UIComponent<'sdl> {
     /// called repeatedly if the mouse is not over the button
     fn moved_out(&mut self);
 
-    /// called repeatedly if the mouse is over the button and left click isn'texture_creator down
+    /// called repeatedly if the mouse is over the button and left click isn't down
     fn moved_in(&mut self);
+
+    /// when a layer is entered causing the mouse to be over a button, then this
+    /// is called instead of a typical moved_in. typically this is treated the
+    /// same as moved_in
+    fn moved_in_from_enter_layer(&mut self) { self.moved_in() }
 
     /// called repeatedly if the mouse is over the button and left click is pressed down
     fn pressed(&mut self);
@@ -282,7 +287,7 @@ pub trait Button<'sdl>: UIComponent<'sdl> {
         mouse_position.map_or(false, |pos| {
             let bounds = self.bounds();
             if bounds.contains_point((pos.0, pos.1)) {
-                self.moved_in();
+                self.moved_in_from_enter_layer();
                 return true;
             }
             false
