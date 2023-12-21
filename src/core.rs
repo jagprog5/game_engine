@@ -558,8 +558,8 @@ pub struct GameState {
     // sdl fundamentals. drop order is in stated order
     event_pump: sdl2::EventPump,
     pub canvas: WindowCanvas,
-    _sdl_video_subsystem: sdl2::VideoSubsystem,
-    _sdl_context: sdl2::Sdl,
+    pub sdl_video_subsystem: sdl2::VideoSubsystem,
+    pub sdl_context: sdl2::Sdl,
 }
 
 impl Drop for GameState {
@@ -627,8 +627,8 @@ impl GameState {
             volatile_layers,
             event_pump,
             canvas,
-            _sdl_video_subsystem: sdl_video_subsystem,
-            _sdl_context: sdl_context,
+            sdl_video_subsystem,
+            sdl_context,
         })
     }
 

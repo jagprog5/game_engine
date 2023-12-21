@@ -51,6 +51,8 @@ pub struct TextContent<'sdl> {
     // last height used to generate the font point
     height: u16,
 
+    // font wrapper object needs to be held since on drop they get freed from
+    // memory (which would unintentionally reload the font on every resize)
     font: Option<FontWrapper<'sdl>>,
     // dimensions of texture from previous resize
     rendered_dims: (u32, u32),

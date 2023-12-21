@@ -1,4 +1,3 @@
-
 use sdl2::{
     render::{TextureCreator, WindowCanvas},
     video::WindowContext,
@@ -70,14 +69,8 @@ impl<'sdl> UI<'sdl> {
         })
     }
 
-    fn add_modify_prior_layer<F>(&mut self, mut layer: Vec<Box<dyn UIComponent<'sdl> + 'sdl>>, f: F)
-    where
-        F: Fn(&mut Self),
-    {
-        if layer.is_empty() {
-            return;
-        }
-        // initialize resize for each component on addition
+    fn replace_top(&mut self, mut layer: Vec<Box<dyn UIComponent<'sdl> + 'sdl>>) {
+        // resize for each component on addition to the ui
         layer.iter_mut().for_each(|component| {
             component.resize(
                 self.state.window_size,
@@ -86,20 +79,41 @@ impl<'sdl> UI<'sdl> {
             )
         });
 
-        f(self);
-
-        self.layers.push(layer);
+        *self.layers.last_mut().unwrap() = layer;
     }
 
     /// push a layer to the ui
     pub fn add(&mut self, layer: Vec<Box<dyn UIComponent<'sdl> + 'sdl>>) {
-        self.add_modify_prior_layer(layer, |ui: &mut Self| {
-            ui.layers.last_mut().map(|prior_layer| {
-                prior_layer
-                    .iter_mut()
-                    .for_each(|component| component.exited_layer())
-            });
+        self.private_add(layer, None)
+    }
+
+    fn private_add(&mut self, mut layer: Vec<Box<dyn UIComponent<'sdl> + 'sdl>>, mouse_position: Option<(i32, i32)>) {
+        if layer.is_empty() {
+            return;
+        }
+
+        // let the top layer know it has been exited
+        self.layers.last_mut().map(|prior_layer| {
+            prior_layer
+                .iter_mut()
+                .for_each(|component| component.covered())
         });
+
+        // resize for each component on addition to the ui
+        layer.iter_mut().for_each(|component| {
+            component.resize(
+                self.state.window_size,
+                self.texture_creator,
+                self.font_manager,
+            )
+        });
+
+        layer.iter_mut().for_each(|component| {
+            component.entered(mouse_position);
+        });
+
+        // add it
+        self.layers.push(layer);
     }
 
     /// returns false if run is complete
@@ -111,7 +125,7 @@ impl<'sdl> UI<'sdl> {
         // individual components. this is stored in self.state
 
         // record mouse pos for if a layer is removed.
-        let mut enter_layer_pos: Option<(i32, i32)> = None;
+        let mut entered_pos: Option<(i32, i32)> = None;
 
         match e {
             sdl2::event::Event::Window {
@@ -138,7 +152,7 @@ impl<'sdl> UI<'sdl> {
             sdl2::event::Event::MouseButtonDown {
                 mouse_btn, x, y, ..
             } => {
-                enter_layer_pos = Some((*x, *y));
+                entered_pos = Some((*x, *y));
                 if *mouse_btn == sdl2::mouse::MouseButton::Left {
                     self.state.button_down = true;
                 }
@@ -146,16 +160,16 @@ impl<'sdl> UI<'sdl> {
             sdl2::event::Event::MouseButtonUp {
                 mouse_btn, x, y, ..
             } => {
-                enter_layer_pos = Some((*x, *y));
+                entered_pos = Some((*x, *y));
                 if *mouse_btn == sdl2::mouse::MouseButton::Left {
                     self.state.button_down = false;
                 }
             }
             sdl2::event::Event::MouseMotion { x, y, .. } => {
-                enter_layer_pos = Some((*x, *y));
+                entered_pos = Some((*x, *y));
             }
             sdl2::event::Event::MouseWheel { x, y, .. } => {
-                enter_layer_pos = Some((*x, *y));
+                entered_pos = Some((*x, *y));
             }
             _ => {}
         } // end of share ui state update
@@ -178,18 +192,6 @@ impl<'sdl> UI<'sdl> {
             break;
         }
 
-        // call after layer has been removed, below
-        fn do_entered_layer<'sdl>(
-            layers: &mut Vec<Vec<Box<dyn UIComponent<'sdl> + 'sdl>>>,
-            enter_layer_pos: Option<(i32, i32)>,
-        ) {
-            layers.last_mut().map(|layer| {
-                layer
-                    .iter_mut()
-                    .for_each(|component| { component.entered_layer(enter_layer_pos); })
-            });
-        }
-
         match result {
             EventHandleResult::None => {}
 
@@ -199,21 +201,27 @@ impl<'sdl> UI<'sdl> {
             EventHandleResult::Quit => return false,
             EventHandleResult::RemoveLayer => {
                 self.layers.pop();
-                do_entered_layer(&mut self.layers, enter_layer_pos);
+                self.layers.last_mut().map(|layer| {
+                    layer.iter_mut().for_each(|component| {
+                        component.entered(entered_pos);
+                    })
+                });
             }
             EventHandleResult::AddLayer(layer) => {
-                if !layer.is_empty() {
-                    self.add(layer);
-                }
+                self.private_add(layer, entered_pos);
             }
             EventHandleResult::ReplaceLayer(layer) => {
-                self.layers.pop();
-                if !layer.is_empty() {
-                    // don't call exited_layer on components since it already happened
-                    // when they were added
-                    self.add_modify_prior_layer(layer, |_| {});
+                if layer.is_empty() {
+                    // treated the exact same as remove layer
+                    self.layers.pop();
+                } else {
+                    self.replace_top(layer);
                 }
-                do_entered_layer(&mut self.layers, enter_layer_pos);
+                self.layers.last_mut().map(|layer| {
+                    layer.iter_mut().for_each(|component| {
+                        component.entered(entered_pos);
+                    })
+                });
             }
         }
 
@@ -244,16 +252,15 @@ pub trait UIComponent<'sdl> {
         font_manager: &'sdl FontManager<'sdl>,
     );
 
-    /// a special event that happens when a ui layer is added on top of the
-    /// layer that this component is a part of. this should clear any state
-    /// associated with rendering of the component
-    fn exited_layer(&mut self) {}
+    /// a event that occurs when this component was part of the top most layer and another layer was added
+    /// on top of it
+    fn covered(&mut self) {}
 
-    /// a special event that happens what a layer is removed from the ui.
-    /// entered_layer is called on all components of the new top level layer.\
-    /// if this occured from a mouse event, then the mouse position is given.
+    /// indicates that this component is now in the top most layer
     /// returns true if it influenced the state of this component
-    fn entered_layer(&mut self, _mouse_position: Option<(i32, i32)>) -> bool { false }
+    fn entered(&mut self, _mouse_position: Option<(i32, i32)>) -> bool {
+        false
+    }
 }
 
 /// this is a minimal wrapper around UIComponent which handles mouse logic. it
@@ -267,10 +274,12 @@ pub trait Button<'sdl>: UIComponent<'sdl> {
     /// called repeatedly if the mouse is over the button and left click isn't down
     fn moved_in(&mut self);
 
-    /// when a layer is entered causing the mouse to be over a button, then this
-    /// is called instead of a typical moved_in. typically this is treated the
-    /// same as moved_in
-    fn moved_in_from_enter_layer(&mut self) { self.moved_in() }
+    /// when a layer is entered and the mouse is over a button, then this is
+    /// called instead of a typical moved_in. typically this is treated the same
+    /// as moved_in
+    fn moved_in_from_entered(&mut self) {
+        self.moved_in()
+    }
 
     /// called repeatedly if the mouse is over the button and left click is pressed down
     fn pressed(&mut self);
@@ -278,15 +287,15 @@ pub trait Button<'sdl>: UIComponent<'sdl> {
     /// called once when mouse is on this button and left click is released
     fn released(&mut self) -> EventHandleResult<'sdl>;
 
-    fn exited_layer(&mut self) {
+    fn covered(&mut self) {
         self.moved_out();
     }
 
-    fn entered_layer(&mut self, mouse_position: Option<(i32, i32)>) -> bool {
+    fn entered(&mut self, mouse_position: Option<(i32, i32)>) -> bool {
         mouse_position.map_or(false, |pos| {
             let bounds = self.bounds();
             if bounds.contains_point((pos.0, pos.1)) {
-                self.moved_in_from_enter_layer();
+                self.moved_in_from_entered();
                 return true;
             }
             false

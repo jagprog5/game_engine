@@ -15,7 +15,6 @@ pub struct FontWrapper<'sdl> {
 impl<'sdl> Drop for FontWrapper<'sdl> {
     fn drop(&mut self) {
         if Rc::strong_count(&self.font) == 1 {
-            println!("dropping: {:?}", self.key);
             self.source.remove(&self.key);
         }
     }

@@ -147,13 +147,13 @@ impl<'sdl> UIComponent<'sdl> for StandardButton<'sdl> {
         );
     }
 
-    fn exited_layer(&mut self) {
-        Button::<'sdl>::exited_layer(self);
+    fn covered(&mut self) {
+        Button::<'sdl>::covered(self);
         self.content.moved_out();
     }
 
-    fn entered_layer(&mut self, mouse_position: Option<(i32, i32)>) -> bool {
-        if Button::<'sdl>::entered_layer(self, mouse_position) {
+    fn entered(&mut self, mouse_position: Option<(i32, i32)>) -> bool {
+        if Button::<'sdl>::entered(self, mouse_position) {
             self.content.moved_in();
             return true;
         }
@@ -171,7 +171,7 @@ impl<'sdl> Button<'sdl> for StandardButton<'sdl> {
         self.content.moved_out();
     }
 
-    fn moved_in_from_enter_layer(&mut self) {
+    fn moved_in_from_entered(&mut self) {
         // do not play sound if moved in from layer removal
         self.focus_state = FocusState::Hovered;
         self.content.moved_in();
