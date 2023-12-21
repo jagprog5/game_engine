@@ -8,7 +8,7 @@ use game_engine::{
     core::GameState,
     ui::{
         standard_button::StandardButton,
-        standard_button_content::{ContentFunctional, FitType, ImageContent, TextContent}, ui::{UIComponent, EventHandleResult, UI}, font_cache::FontCache,
+        standard_button_content::{ContentFunctional, FitType, ImageContent, TextContent}, ui::{UIComponent, EventHandleResult, UI}, font_manager::FontManager,
     },
 };
 use sdl2::{pixels::Color, rect::Rect};
@@ -335,11 +335,11 @@ fn main() -> Result<(), String> {
     // shared with anything that needs it. in this case, just the ui
     let texture_creator = state.canvas.texture_creator();
     let ttf_context = sdl2::ttf::init().map_err(|e| e.to_string())?;
-    let font_cache = FontCache::new(16, &ttf_context);
+    let font_manager = FontManager::new(&ttf_context);
 
     // let audio_context = sdl2::mixer::init(sdl2::mixer::InitFlag::OGG);
 
-    let mut ui = UI::new(&state.canvas, &font_cache, &texture_creator)?;
+    let mut ui = UI::new(&state.canvas, &font_manager, &texture_creator)?;
     ui.add(initial_menu());
 
     let ui_cell = Cell::new(Option::Some(ui));

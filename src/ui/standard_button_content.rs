@@ -6,8 +6,8 @@ use sdl2::{
     video::WindowContext,
 };
 
-use super::ui::EventHandleResult;
-use super::{standard_button::FocusState, util::shrink_fit, font_cache::FontCache};
+use super::{ui::EventHandleResult, font_manager::FontWrapper};
+use super::{standard_button::FocusState, util::shrink_fit, font_manager::FontManager};
 
 pub trait ContentFunctional<'sdl> {
     /// what happens when the button is released
@@ -27,7 +27,7 @@ pub trait Content<'sdl> {
         &mut self,
         requested_size: (u32, u32),
         texture_creator: &'sdl TextureCreator<WindowContext>,
-        font_cache: &FontCache,
+        font_manager: &'sdl FontManager<'sdl>,
     ) -> (u32, u32);
 
     fn render(&self, canvas: &mut WindowCanvas, bound: Rect);
@@ -51,10 +51,12 @@ pub struct TextContent<'sdl> {
     // last height used to generate the font point
     height: u16,
 
+    font: Option<FontWrapper<'sdl>>,
     // dimensions of texture from previous resize
     rendered_dims: (u32, u32),
     rendered_text: Option<Texture<'sdl>>,
 
+    focus_font: Option<FontWrapper<'sdl>>,
     // simple expanding the text doesn't look right, so this always renders a
     // slightly larger font for when the button is focused
     focus_rendered_dims: (u32, u32),
@@ -78,8 +80,10 @@ impl<'sdl> TextContent<'sdl> {
             text,
             font_path,
             height: 0,
+            font: None,
             rendered_dims: (0, 0),
             rendered_text: None,
+            focus_font: None,
             focus_rendered_dims: (0, 0),
             focus_rendered_text: None,
             functional,
@@ -93,11 +97,13 @@ impl<'sdl> Content<'sdl> for TextContent<'sdl> {
         &mut self,
         requested_size: (u32, u32),
         texture_creator: &'sdl TextureCreator<WindowContext>,
-        font_cache: &FontCache,
+        font_manager: &'sdl FontManager<'sdl>,
     ) -> (u32, u32) {
         self.height = requested_size.1.try_into().unwrap_or(u16::MAX);
-        let font_rc = font_cache.get(self.font_path.clone(), self.height);
-        let surface = font_rc
+
+        self.font = Some(font_manager.get(self.font_path.clone(), self.height));
+
+        let surface = self.font.as_ref().unwrap().font
             .render(&self.text)
             .blended(Color::RGBA(255, 255, 255, 255))
             .unwrap();
@@ -112,15 +118,15 @@ impl<'sdl> Content<'sdl> for TextContent<'sdl> {
         let ret = (q.width, u32::from(self.height));
 
         // same as above but for the focused text
-
-        
         let focus_height: f32 = f32::from(self.height) * Self::FOCUS_FONT_MULTIPLIER;
         let focus_height = if focus_height > f32::from(u16::MAX) { u16::MAX } else { focus_height as u16 };
-        let font_rc = font_cache.get(
+
+        self.focus_font = Some(font_manager.get(
             self.font_path.clone(),
             focus_height,
-        );
-        let surface = font_rc
+        ));
+
+        let surface = self.focus_font.as_ref().unwrap().font
             .render(&self.text)
             .blended(Color::RGBA(255, 255, 255, 255))
             .unwrap();
@@ -234,7 +240,7 @@ impl<'sdl> Content<'sdl> for ImageContent<'sdl> {
         &mut self,
         size: (u32, u32),
         texture_creator: &'sdl TextureCreator<WindowContext>,
-        _font_cache: &FontCache,
+        _font_manager: &FontManager,
     ) -> (u32, u32) {
         if let None = self.rendered_image {
             self.rendered_image =

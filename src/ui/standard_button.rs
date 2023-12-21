@@ -1,6 +1,6 @@
 use sdl2::{pixels::Color, rect::Rect, render::WindowCanvas};
 
-use super::{standard_button_content::Content, font_cache::FontCache, ui::{UIComponent, UIState, EventHandleResult, Button}};
+use super::{standard_button_content::Content, font_manager::FontManager, ui::{UIComponent, UIState, EventHandleResult, Button}};
 
 #[derive(PartialEq, Eq)]
 // button state for rendering, changed by sdl events
@@ -100,7 +100,7 @@ impl<'sdl> UIComponent<'sdl> for StandardButton<'sdl> {
         &mut self,
         window_size: (u32, u32),
         texture_creator: &'sdl sdl2::render::TextureCreator<sdl2::video::WindowContext>,
-        font_cache: &FontCache,
+        font_manager: &'sdl FontManager<'sdl>,
     ) {
         // how big will the entire button be
         let bound = self.content.get_button_bound(window_size);
@@ -121,7 +121,7 @@ impl<'sdl> UIComponent<'sdl> for StandardButton<'sdl> {
         let responded_dim = self.content.resize(
             (requested_content_bound_w, requested_content_bound_h),
             texture_creator,
-            font_cache,
+            font_manager,
         );
 
         self.content_bound = Rect::new(

@@ -1,6 +1,6 @@
 use sdl2::{pixels::Color, rect::Rect};
 
-use super::{font_cache::FontCache, ui::{UIComponent, UIState, EventHandleResult}};
+use super::{font_manager::FontManager, ui::{UIComponent, UIState, EventHandleResult}};
 
 /// a tint over the entire screen
 pub struct Tint {
@@ -27,7 +27,7 @@ impl<'sdl> UIComponent<'sdl> for Tint {
         &mut self,
         _: (u32, u32),
         _: &'sdl sdl2::render::TextureCreator<sdl2::video::WindowContext>,
-        _: &FontCache,
+        _: &FontManager,
     ) {
     }
 }

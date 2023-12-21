@@ -1,11 +1,10 @@
 
 use sdl2::{
     render::{TextureCreator, WindowCanvas},
-    ttf::Sdl2TtfContext,
     video::WindowContext,
 };
 
-use super::font_cache::FontCache;
+use super::font_manager::FontManager;
 
 extern crate sdl2;
 
@@ -48,16 +47,16 @@ pub struct UI<'sdl> {
     layers: Vec<Vec<Box<dyn UIComponent<'sdl> + 'sdl>>>,
 
     texture_creator: &'sdl TextureCreator<WindowContext>,
-    font_cache: &'sdl FontCache<'sdl>,
+    font_manager: &'sdl FontManager<'sdl>,
 
-    /// always kept in sync with the left mouse button
+    /// state shared by all ui components
     state: UIState,
 }
 
 impl<'sdl> UI<'sdl> {
     pub fn new(
         canvas: &WindowCanvas,
-        font_cache: &'sdl FontCache<'sdl>,
+        font_manager: &'sdl FontManager<'sdl>,
         texture_creator: &'sdl TextureCreator<WindowContext>,
     ) -> Result<Self, String> {
         Ok(Self {
@@ -67,7 +66,7 @@ impl<'sdl> UI<'sdl> {
                 window_size: canvas.output_size().unwrap(),
                 button_down: false,
             },
-            font_cache,
+            font_manager,
         })
     }
 
@@ -83,7 +82,7 @@ impl<'sdl> UI<'sdl> {
             component.resize(
                 self.state.window_size,
                 self.texture_creator,
-                self.font_cache,
+                self.font_manager,
             )
         });
 
@@ -130,7 +129,7 @@ impl<'sdl> UI<'sdl> {
                             component.resize(
                                 self.state.window_size,
                                 &self.texture_creator,
-                                &self.font_cache,
+                                &self.font_manager,
                             )
                         })
                     })
@@ -242,7 +241,7 @@ pub trait UIComponent<'sdl> {
         &mut self,
         window_size: (u32, u32),
         texture_creator: &'sdl TextureCreator<WindowContext>,
-        font_cache: &FontCache,
+        font_manager: &'sdl FontManager<'sdl>,
     );
 
     /// a special event that happens when a ui layer is added on top of the
