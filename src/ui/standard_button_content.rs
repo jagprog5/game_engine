@@ -6,7 +6,8 @@ use sdl2::{
     video::WindowContext,
 };
 
-use super::{standard_button::FocusState, util::shrink_fit, EventHandleResult, FontCache};
+use super::ui::EventHandleResult;
+use super::{standard_button::FocusState, util::shrink_fit, font_cache::FontCache};
 
 pub trait ContentFunctional<'sdl> {
     /// what happens when the button is released

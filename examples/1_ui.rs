@@ -1,7 +1,6 @@
 use std::{
     cell::Cell,
     marker::PhantomData,
-    // path::{PathBuf},
     path::PathBuf,
 };
 
@@ -9,8 +8,7 @@ use game_engine::{
     core::GameState,
     ui::{
         standard_button::StandardButton,
-        standard_button_content::{ContentFunctional, FitType, ImageContent, TextContent},
-        EventHandleResult, UIComponent, UI,
+        standard_button_content::{ContentFunctional, FitType, ImageContent, TextContent}, ui::{UIComponent, EventHandleResult, UI},
     },
 };
 use sdl2::{pixels::Color, rect::Rect};

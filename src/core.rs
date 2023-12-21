@@ -593,7 +593,7 @@ impl GameState {
         )
     }
 
-    /// create a game state, with associated window and sdl context. \
+    /// create a game state, with sdl context + video subsystem. \
     /// `win_title` and `win_size` are used to set the properties of the window\
     /// `layer_names` is the set of layer names to register; used to indicate
     /// RENDERING ORDER of sprites
