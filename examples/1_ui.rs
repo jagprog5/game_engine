@@ -8,7 +8,7 @@ use game_engine::{
     core::GameState,
     ui::{
         standard_button::StandardButton,
-        standard_button_content::{ContentFunctional, FitType, ImageContent, TextContent}, ui::{UIComponent, EventHandleResult, UI},
+        standard_button_content::{ContentFunctional, FitType, ImageContent, TextContent}, ui::{UIComponent, EventHandleResult, UI}, font_cache::FontCache,
     },
 };
 use sdl2::{pixels::Color, rect::Rect};
@@ -331,10 +331,15 @@ fn character_selected_menu<'sdl>(
 
 fn main() -> Result<(), String> {
     let mut state = GameState::new("ui with layers of buttons", (400u32, 600u32), &[])?;
+
+    // shared with anything that needs it. in this case, just the ui
     let texture_creator = state.canvas.texture_creator();
     let ttf_context = sdl2::ttf::init().map_err(|e| e.to_string())?;
+    let font_cache = FontCache::new(16, &ttf_context);
 
-    let mut ui = UI::new(&state.canvas, &ttf_context, &texture_creator)?;
+    // let audio_context = sdl2::mixer::init(sdl2::mixer::InitFlag::OGG);
+
+    let mut ui = UI::new(&state.canvas, &font_cache, &texture_creator)?;
     ui.add(initial_menu());
 
     let ui_cell = Cell::new(Option::Some(ui));

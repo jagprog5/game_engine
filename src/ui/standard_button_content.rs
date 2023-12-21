@@ -27,7 +27,7 @@ pub trait Content<'sdl> {
         &mut self,
         requested_size: (u32, u32),
         texture_creator: &'sdl TextureCreator<WindowContext>,
-        font_cache: &mut FontCache,
+        font_cache: &FontCache,
     ) -> (u32, u32);
 
     fn render(&self, canvas: &mut WindowCanvas, bound: Rect);
@@ -93,7 +93,7 @@ impl<'sdl> Content<'sdl> for TextContent<'sdl> {
         &mut self,
         requested_size: (u32, u32),
         texture_creator: &'sdl TextureCreator<WindowContext>,
-        font_cache: &mut FontCache,
+        font_cache: &FontCache,
     ) -> (u32, u32) {
         self.height = requested_size.1.try_into().unwrap_or(u16::MAX);
         let font_rc = font_cache.get(self.font_path.clone(), self.height);
@@ -234,7 +234,7 @@ impl<'sdl> Content<'sdl> for ImageContent<'sdl> {
         &mut self,
         size: (u32, u32),
         texture_creator: &'sdl TextureCreator<WindowContext>,
-        _font_cache: &mut FontCache,
+        _font_cache: &FontCache,
     ) -> (u32, u32) {
         if let None = self.rendered_image {
             self.rendered_image =

@@ -100,7 +100,7 @@ impl<'sdl> UIComponent<'sdl> for StandardButton<'sdl> {
         &mut self,
         window_size: (u32, u32),
         texture_creator: &'sdl sdl2::render::TextureCreator<sdl2::video::WindowContext>,
-        font_cache: &mut FontCache,
+        font_cache: &FontCache,
     ) {
         // how big will the entire button be
         let bound = self.content.get_button_bound(window_size);

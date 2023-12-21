@@ -48,7 +48,7 @@ pub struct UI<'sdl> {
     layers: Vec<Vec<Box<dyn UIComponent<'sdl> + 'sdl>>>,
 
     texture_creator: &'sdl TextureCreator<WindowContext>,
-    font_manager: FontCache<'sdl>,
+    font_cache: &'sdl FontCache<'sdl>,
 
     /// always kept in sync with the left mouse button
     state: UIState,
@@ -57,7 +57,7 @@ pub struct UI<'sdl> {
 impl<'sdl> UI<'sdl> {
     pub fn new(
         canvas: &WindowCanvas,
-        ttf_context: &'sdl Sdl2TtfContext,
+        font_cache: &'sdl FontCache<'sdl>,
         texture_creator: &'sdl TextureCreator<WindowContext>,
     ) -> Result<Self, String> {
         Ok(Self {
@@ -67,7 +67,7 @@ impl<'sdl> UI<'sdl> {
                 window_size: canvas.output_size().unwrap(),
                 button_down: false,
             },
-            font_manager: FontCache::new(16, ttf_context),
+            font_cache,
         })
     }
 
@@ -83,7 +83,7 @@ impl<'sdl> UI<'sdl> {
             component.resize(
                 self.state.window_size,
                 self.texture_creator,
-                &mut self.font_manager,
+                self.font_cache,
             )
         });
 
@@ -130,7 +130,7 @@ impl<'sdl> UI<'sdl> {
                             component.resize(
                                 self.state.window_size,
                                 &self.texture_creator,
-                                &mut self.font_manager,
+                                &self.font_cache,
                             )
                         })
                     })
@@ -242,7 +242,7 @@ pub trait UIComponent<'sdl> {
         &mut self,
         window_size: (u32, u32),
         texture_creator: &'sdl TextureCreator<WindowContext>,
-        font_cache: &mut FontCache,
+        font_cache: &FontCache,
     );
 
     /// a special event that happens when a ui layer is added on top of the

@@ -27,7 +27,7 @@ impl<'sdl> UIComponent<'sdl> for Tint {
         &mut self,
         _: (u32, u32),
         _: &'sdl sdl2::render::TextureCreator<sdl2::video::WindowContext>,
-        _: &mut FontCache,
+        _: &FontCache,
     ) {
     }
 }
