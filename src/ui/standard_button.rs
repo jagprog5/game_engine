@@ -1,6 +1,10 @@
 use sdl2::{pixels::Color, rect::Rect, render::WindowCanvas};
 
-use super::{standard_button_content::Content, font_manager::FontManager, ui::{UIComponent, UIState, EventHandleResult, Button}};
+use super::{
+    font_manager::FontManager,
+    standard_button_content::Content,
+    ui::{Button, EventHandleResult, UIComponent, UIState},
+};
 
 #[derive(PartialEq, Eq)]
 // button state for rendering, changed by sdl events
@@ -11,7 +15,7 @@ pub enum FocusState {
 }
 
 /// a standard button has a gradient border and a background color. the stuff
-/// inside the border is a Content. the content also handles the position and
+/// inside the border is a Content. the content handles the position and
 /// size for this button, as well as what happen on button release
 pub struct StandardButton<'sdl> {
     bg_idle_color: Color,
@@ -20,14 +24,21 @@ pub struct StandardButton<'sdl> {
     border_inner_color: Color,
     border_width: u16,
     border_steps: u16,
-    content: Box<dyn Content<'sdl> + 'sdl>,
     bound: Rect,
     content_bound: Rect,
     focus_state: FocusState,
+
+    content: Box<dyn Content<'sdl> + 'sdl>,
+    /// keys that can be used to interact with the button (instead of the
+    /// mouse).
+    keys: Vec<sdl2::keyboard::Keycode>,
 }
 
 impl<'sdl> StandardButton<'sdl> {
-    pub fn default_look(content: Box<dyn Content<'sdl> + 'sdl>) -> Self {
+    pub fn default_look(
+        content: Box<dyn Content<'sdl> + 'sdl>,
+        keys: Vec<sdl2::keyboard::Keycode>,
+    ) -> Self {
         Self::new(
             Color::RGBA(100, 100, 100, 30),
             Color::RGBA(100, 100, 100, 100),
@@ -36,6 +47,7 @@ impl<'sdl> StandardButton<'sdl> {
             15,
             4,
             content,
+            keys,
         )
     }
 
@@ -47,6 +59,7 @@ impl<'sdl> StandardButton<'sdl> {
         border_width: u16,
         border_steps: u16,
         content: Box<dyn Content<'sdl> + 'sdl>,
+        keys: Vec<sdl2::keyboard::Keycode>,
     ) -> Self {
         Self {
             bg_idle_color,
@@ -55,14 +68,16 @@ impl<'sdl> StandardButton<'sdl> {
             border_inner_color,
             border_width,
             border_steps,
-            content,
-
+            
             // these bounds will never be used (replaced on resize when added to UI),
             // but just in case this places it off screen. Rect::contains_point is
             // inclusive
             content_bound: Rect::new(-1, -1, 0, 0),
             bound: Rect::new(-1, -1, 0, 0),
             focus_state: FocusState::Idle,
+            
+            content,
+            keys,
         }
     }
 }
@@ -164,6 +179,10 @@ impl<'sdl> UIComponent<'sdl> for StandardButton<'sdl> {
 impl<'sdl> Button<'sdl> for StandardButton<'sdl> {
     fn bounds(&self) -> Rect {
         self.bound
+    }
+
+    fn keys(&self) -> &Vec<sdl2::keyboard::Keycode> {
+        &self.keys
     }
 
     fn moved_out(&mut self) {

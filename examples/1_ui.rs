@@ -1,15 +1,14 @@
-use std::{
-    cell::Cell,
-    marker::PhantomData,
-    path::PathBuf,
-};
+use std::{cell::Cell, marker::PhantomData, path::PathBuf};
 
 use game_engine::{
+    audio::chunk_cache::ChunkCache,
     core::GameState,
     ui::{
+        font_manager::FontManager,
         standard_button::StandardButton,
-        standard_button_content::{ContentFunctional, FitType, ImageContent, TextContent}, ui::{UIComponent, EventHandleResult, UI}, font_manager::FontManager,
-    }, audio::chunk_cache::ChunkCache,
+        standard_button_content::{ContentFunctional, FitType, ImageContent, TextContent},
+        ui::{EventHandleResult, UIComponent, UI},
+    },
 };
 use sdl2::{pixels::Color, rect::Rect};
 
@@ -138,7 +137,10 @@ fn initial_menu<'sdl>() -> Vec<Box<dyn UIComponent<'sdl> + 'sdl>> {
         font(),
         Box::new(new_game_functionality),
     );
-    let new_game_button = StandardButton::default_look(Box::new(new_game_content));
+    let new_game_button = StandardButton::default_look(
+        Box::new(new_game_content),
+        vec![sdl2::keyboard::Keycode::N, sdl2::keyboard::Keycode::Return],
+    );
     ret.push(Box::new(new_game_button));
 
     let load_game_functionality = LoadGameButtonFunctional { _mark: PhantomData };
@@ -147,12 +149,21 @@ fn initial_menu<'sdl>() -> Vec<Box<dyn UIComponent<'sdl> + 'sdl>> {
         font(),
         Box::new(load_game_functionality),
     );
-    let load_game_button = StandardButton::default_look(Box::new(load_game_content));
+    let load_game_button = StandardButton::default_look(
+        Box::new(load_game_content),
+        vec![sdl2::keyboard::Keycode::L],
+    );
     ret.push(Box::new(load_game_button));
 
     let quit_functionality = QuitButtonFunctional { _mark: PhantomData };
     let quit_content = TextContent::new("Quit".to_string(), font(), Box::new(quit_functionality));
-    let quit_button = StandardButton::default_look(Box::new(quit_content));
+    let quit_button = StandardButton::default_look(
+        Box::new(quit_content),
+        vec![
+            sdl2::keyboard::Keycode::Escape,
+            sdl2::keyboard::Keycode::Backspace,
+        ],
+    );
     ret.push(Box::new(quit_button));
     ret
 }
@@ -176,7 +187,13 @@ fn new_game_menu<'sdl>() -> Vec<Box<dyn UIComponent<'sdl> + 'sdl>> {
 
     let back_functionality = BackButtonFunctional { _mark: PhantomData };
     let back_content = TextContent::new("Back".to_string(), font(), Box::new(back_functionality));
-    let back_button = StandardButton::default_look(Box::new(back_content));
+    let back_button = StandardButton::default_look(
+        Box::new(back_content),
+        vec![
+            sdl2::keyboard::Keycode::Escape,
+            sdl2::keyboard::Keycode::Backspace,
+        ],
+    );
     ret.push(Box::new(back_button));
 
     struct TopLeftCharacterFunctional<'sdl> {
@@ -199,7 +216,7 @@ fn new_game_menu<'sdl>() -> Vec<Box<dyn UIComponent<'sdl> + 'sdl>> {
         FitType::Shrink,
         0.1f32,
     );
-    let top_left_button = StandardButton::default_look(Box::new(top_left_content));
+    let top_left_button = StandardButton::default_look(Box::new(top_left_content), vec![]);
     ret.push(Box::new(top_left_button));
 
     struct TopRightCharacterFunctional<'sdl> {
@@ -222,7 +239,7 @@ fn new_game_menu<'sdl>() -> Vec<Box<dyn UIComponent<'sdl> + 'sdl>> {
         FitType::Shrink,
         0.1f32,
     );
-    let top_right_button = StandardButton::default_look(Box::new(top_right_content));
+    let top_right_button = StandardButton::default_look(Box::new(top_right_content), vec![]);
     ret.push(Box::new(top_right_button));
 
     struct BottomLeftCharacterFunctional<'sdl> {
@@ -245,7 +262,7 @@ fn new_game_menu<'sdl>() -> Vec<Box<dyn UIComponent<'sdl> + 'sdl>> {
         FitType::Shrink,
         0.1f32,
     );
-    let bottom_left_button = StandardButton::default_look(Box::new(bottom_left_content));
+    let bottom_left_button = StandardButton::default_look(Box::new(bottom_left_content), vec![]);
     ret.push(Box::new(bottom_left_button));
 
     struct BottomRightCharacterFunctional<'sdl> {
@@ -268,7 +285,7 @@ fn new_game_menu<'sdl>() -> Vec<Box<dyn UIComponent<'sdl> + 'sdl>> {
         FitType::Shrink,
         0.1f32,
     );
-    let bottom_right_button = StandardButton::default_look(Box::new(bottom_right_content));
+    let bottom_right_button = StandardButton::default_look(Box::new(bottom_right_content), vec![]);
     ret.push(Box::new(bottom_right_button));
 
     ret
@@ -299,7 +316,13 @@ fn character_selected_menu<'sdl>(
 
     let back_functionality = BackButtonFunctional { _mark: PhantomData };
     let back_content = TextContent::new("Back".to_string(), font(), Box::new(back_functionality));
-    let back_button = StandardButton::default_look(Box::new(back_content));
+    let back_button = StandardButton::default_look(
+        Box::new(back_content),
+        vec![
+            sdl2::keyboard::Keycode::Escape,
+            sdl2::keyboard::Keycode::Backspace,
+        ],
+    );
     ret.push(Box::new(back_button));
 
     struct GoButtonFunctional<'sdl> {
@@ -323,7 +346,8 @@ fn character_selected_menu<'sdl>(
         character,
     };
     let go_content = TextContent::new("Start".to_string(), font(), Box::new(go_functionality));
-    let go_button = StandardButton::default_look(Box::new(go_content));
+    let go_button =
+        StandardButton::default_look(Box::new(go_content), vec![sdl2::keyboard::Keycode::Return]);
     ret.push(Box::new(go_button));
 
     ret
@@ -339,7 +363,6 @@ fn main() -> Result<(), String> {
     let sdl_audio_subsystem = state.sdl_context.audio()?;
     let audio_context = sdl2::mixer::init(sdl2::mixer::InitFlag::OGG)?;
     let _chunk_cache = ChunkCache::new(16, &sdl_audio_subsystem, &audio_context); // todo use in ui
-
 
     let mut ui = UI::new(&state.canvas, &font_manager, &texture_creator)?;
     ui.add(initial_menu());

@@ -87,7 +87,11 @@ impl<'sdl> UI<'sdl> {
         self.private_add(layer, None)
     }
 
-    fn private_add(&mut self, mut layer: Vec<Box<dyn UIComponent<'sdl> + 'sdl>>, mouse_position: Option<(i32, i32)>) {
+    fn private_add(
+        &mut self,
+        mut layer: Vec<Box<dyn UIComponent<'sdl> + 'sdl>>,
+        mouse_position: Option<(i32, i32)>,
+    ) {
         if layer.is_empty() {
             return;
         }
@@ -263,10 +267,12 @@ pub trait UIComponent<'sdl> {
     }
 }
 
-/// this is a minimal wrapper around UIComponent which handles mouse logic. it
-/// only recognizes left click
+/// this is a minimal wrapper around UIComponent which handles (left )mouse and key
+/// logic
 pub trait Button<'sdl>: UIComponent<'sdl> {
     fn bounds(&self) -> sdl2::rect::Rect;
+
+    fn keys(&self) -> &Vec<sdl2::keyboard::Keycode>;
 
     /// called repeatedly if the mouse is not over the button
     fn moved_out(&mut self);
@@ -338,6 +344,22 @@ pub trait Button<'sdl>: UIComponent<'sdl> {
                 if *mouse_btn == sdl2::mouse::MouseButton::Left {
                     let bounds = self.bounds();
                     if bounds.contains_point((*x, *y)) {
+                        let r = self.released();
+                        self.moved_in();
+                        return r;
+                    }
+                }
+            }
+            sdl2::event::Event::KeyDown { keycode, .. } => {
+                if let Some(key) = keycode {
+                    if self.keys().contains(key) {
+                        self.pressed();
+                    }
+                }
+            }
+            sdl2::event::Event::KeyUp { keycode, .. } => {
+                if let Some(key) = keycode {
+                    if self.keys().contains(key) {
                         let r = self.released();
                         self.moved_in();
                         return r;
