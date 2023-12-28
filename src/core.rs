@@ -19,7 +19,11 @@ pub enum LivelinessStatus {
 
 impl LivelinessStatus {
     pub fn new(b: bool) -> Self {
-        if b { LivelinessStatus::Retain } else { LivelinessStatus::Despawn }
+        if b {
+            LivelinessStatus::Retain
+        } else {
+            LivelinessStatus::Despawn
+        }
     }
 }
 
@@ -359,10 +363,9 @@ impl PersistentState {
         let mut tagged_entities: BTreeMap<&'static str, Vec<TaggedPersistent>> = BTreeMap::new();
 
         // associates entities with their tags. for time complexity later
-        let mut lookup_tag: HashMap<PersistentEntity, u64> = HashMap::new();
+        let mut lookup_tag: HashMap<&PersistentEntity, u64> = HashMap::new();
 
-        // for all entities in the layers get a rc clone (serde requires data to
-        // be owned), and set a tag uniquely identifying PersistentEntities
+        // for all entities in the layers set a tag uniquely identifying each
         for (key, entities) in layers {
             let mut tagged_entities_in_layer: Vec<TaggedPersistent> = Vec::new();
             for entity in entities.iter() {
@@ -375,7 +378,7 @@ impl PersistentState {
                     // association that's not used (only persistent ->
                     // persistent weak ref is saved and loaded), but that's
                     // fine. this check doesn't really matter anyway
-                    lookup_tag.insert(entity.clone(), next_tag);
+                    lookup_tag.insert(&entity, next_tag);
                 }
 
                 tagged_entities_in_layer.push(TaggedPersistent {
@@ -420,13 +423,17 @@ impl PersistentState {
     }
 }
 
-// this is a PersistentState, but a temporary during deserialization. it uses String instead of str
+// this is a PersistentState, but a temporary during deserialization.
+// unlike a PersistentState it uses a String (loaded from save file) instead of static str
 #[derive(serde::Deserialize)]
 struct PersistentStateTemp {
     #[serde(deserialize_with = "PersistentStateTemp::deserialize_layers")]
     pub persistent_layers: BTreeMap<String, Vec<PersistentEntity>>,
 }
 
+// the idea is that only the game state is allowed strong references to
+// entities, and that the entities are only allowed weak references between
+// themselves. this prevent circular refererences and leaks (e.g. on load)
 macro_rules! debug_assert_layers_rc_sanity {
     ($layers:expr) => {
         debug_assert!(
@@ -641,7 +648,7 @@ impl GameState {
     }
 
     /// reads save file and replaces only persistent entities member\
-    /// consider first calling clear to also remove volatile entities
+    /// consider first calling clear_volatile to also remove volatile entities
     pub fn load(&mut self, path: String) -> Result<(), String> {
         let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
         let reader = std::io::BufReader::new(file);
@@ -660,11 +667,16 @@ impl GameState {
             .for_each(|v| v.clear());
     }
 
+    /// clear only volatile entities
+    pub fn clear_volatile(&mut self) {
+        debug_assert_layers_rc_sanity!(&self.volatile_layers);
+        self.volatile_layers.values_mut().for_each(|v| v.clear());
+    }
+
     /// clears all entities
     pub fn clear(&mut self) {
         self.clear_persistent();
-        debug_assert_layers_rc_sanity!(&self.volatile_layers);
-        self.volatile_layers.values_mut().for_each(|v| v.clear());
+        self.clear_volatile();
     }
 
     /// spawn a volatile entity to a render layer
@@ -705,10 +717,14 @@ impl GameState {
 
     /// event_handler closure should return false (dead) or err only if run should return. it handles sdl2 events\
     /// post_render_hook is a render function over top of the game. it may return an error string which also causes run to return\
-    pub fn run<EventHandler,PostRenderHook>(&mut self, event_handler: EventHandler, post_render_hook: PostRenderHook) -> Result<(), String>
+    pub fn run<EventHandler, PostRenderHook>(
+        &mut self,
+        event_handler: EventHandler,
+        post_render_hook: PostRenderHook,
+    ) -> Result<(), String>
     where
-    EventHandler: Fn(&mut Self, &sdl2::event::Event) -> Result<bool, String>,
-    PostRenderHook: Fn(&mut WindowCanvas)
+        EventHandler: Fn(&mut Self, &sdl2::event::Event) -> Result<bool, String>,
+        PostRenderHook: Fn(&mut WindowCanvas),
     {
         let seconds_per_frame = std::time::Duration::from_secs_f32(1f32 / Self::GOAL_FPS);
         'outer: loop {
